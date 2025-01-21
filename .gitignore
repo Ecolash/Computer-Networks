@@ -1,0 +1,11 @@
+.vscode/
+*.exe
+*.out
+*.o
+
+client
+server
+core
+
+*.tmp
+*.log
