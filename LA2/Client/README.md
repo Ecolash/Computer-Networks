@@ -1,4 +1,4 @@
-Available Filenames to Try (present in server):
+Available Filenames to Try (present in Server):
 
 1) sample1.txt
 2) sample2.txt

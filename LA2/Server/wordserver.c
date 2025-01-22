@@ -42,7 +42,7 @@ int send_file(FILE* fp, int sockfd, struct sockaddr_in addr)
         int read = fscanf(fp, "%s", buffer);
         if (read == -1) { printf("[-] Error in reading file.\n"); return -1; }
         buffer[strcspn(buffer, "\n")] = 0;
-        int send_status = sendto(sockfd, buffer, MAX_BUFFER_SIZE, 0, (struct sockaddr*)&addr, addr_size);
+        int send_status = sendto(sockfd, buffer, strlen(buffer), 0, (struct sockaddr*)&addr, addr_size);
         switch (send_status)
         {
             case -1: printf("[-] Error in sending file.\n"); return -1;
@@ -100,7 +100,7 @@ int main(int argc, char **argv)
         FILE *fp = fopen(FILENAME, "r");
         int read = fscanf(fp, "%s", buffer);
         buffer[strcspn(buffer, "\n")] = 0;
-        int send_status = sendto(sockfd, buffer, MAX_BUFFER_SIZE, 0, (struct sockaddr *)&si_other, addr_size);
+        int send_status = sendto(sockfd, buffer, strlen(buffer), 0, (struct sockaddr *)&si_other, addr_size);
         switch (send_status)
         {
             case -1: printf("[-] Error in sending response.\n"); exit(1);
@@ -120,7 +120,7 @@ int main(int argc, char **argv)
         strcat(buffer, FILENAME);
     }
 
-    int send_status = sendto(sockfd, buffer, MAX_BUFFER_SIZE, 0, (struct sockaddr*)&si_other, addr_size);
+    int send_status = sendto(sockfd, buffer, strlen(buffer), 0, (struct sockaddr*)&si_other, addr_size);
     switch (send_status)
     {
         case -1: printf("[-] Error in sending response.\n"); exit(1);

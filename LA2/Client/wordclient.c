@@ -37,7 +37,8 @@ int write_file(int sockfd, struct sockaddr_in addr, char *FILENAME)
     do {
         memset(CLIENT_REQUEST, '\0', MAX_BUFFER_SIZE);
         sprintf(CLIENT_REQUEST, "WORD%d", ++count);
-        int send_status = sendto(sockfd, CLIENT_REQUEST, MAX_BUFFER_SIZE, 0, (struct sockaddr*)&addr, addr_size);
+        
+        int send_status = sendto(sockfd, CLIENT_REQUEST, strlen(CLIENT_REQUEST), 0, (struct sockaddr*)&addr, addr_size);
         switch (send_status)
         {
             case -1: printf("[-] Error in sending client request.\n"); return -1;
@@ -93,7 +94,7 @@ int main(int argc, char **argv)
     FILENAME[strcspn(FILENAME, "\n")] = 0;
 
     addr_size = sizeof(server_addr);
-    int send_FILENAME = sendto(sockfd, FILENAME, MAX_BUFFER_SIZE, 0, (struct sockaddr*)&server_addr, addr_size);
+    int send_FILENAME = sendto(sockfd, FILENAME, strlen(FILENAME), 0, (struct sockaddr*)&server_addr, addr_size);
 
     switch (send_FILENAME)
     {
