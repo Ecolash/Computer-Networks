@@ -1,3 +1,10 @@
+/*=============================================================================================================
+Assignment 2 Submission
+Name: Tuhin Mondal
+Roll number: 22CS10087
+Link of the pcap file: https://drive.google.com/file/d/1hkY3sQ2QK1hJYJERApmz-CLt3XHnHZ_L/view?usp=drive_link
+=============================================================================================================*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +38,7 @@ int write_file(int sockfd, struct sockaddr_in addr, char *FILENAME)
 
     int count = 0;
     socklen_t addr_size = sizeof(addr);
-    FILE *fp = fopen(FILENAME, "w");
+    FILE *fp = fopen("received.txt", "w");
     fprintf(fp, "HELLO\n");
     
     do {
