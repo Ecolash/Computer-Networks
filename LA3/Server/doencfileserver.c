@@ -32,7 +32,7 @@ int write_file(int sockfd, struct sockaddr_in addr, const char *filename)
     FILE *file = fopen(filename, "w");
 
     while(1) {
-        int received = recvfrom(sockfd, buffer, SIZE, 0, (struct sockaddr*)&addr, &addr_size);
+        int received = recv(sockfd, buffer, SIZE, 0);
         switch(received) {
             case -1: printf("[-] Error in receiving data.\n"); return -1;
             default: break;
