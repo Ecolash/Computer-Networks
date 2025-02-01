@@ -4,15 +4,16 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <time.h>
+#include <fcntl.h>
 
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define KEYSIZE     26
-#define PORT        8080
-#define SIZE        100
+#define KEYSIZE              26
+#define PORT                 5050
+#define MAX_CHUNKSIZE        100
 
 char *format_time()
 {
@@ -27,35 +28,43 @@ char *format_time()
 int write_file(int sockfd, struct sockaddr_in addr, const char *filename) 
 {
     int n = 0;
-    char buffer[SIZE] = {0};
+    char buffer[MAX_CHUNKSIZE];
+    memset(buffer, '\0', MAX_CHUNKSIZE);
+
     socklen_t addr_size = sizeof(addr);
-    FILE *file = fopen(filename, "w");
+    int file = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (file < 0) {
+        printf("[-] Error in opening file.\n");
+        return -1;
+    }
 
     while(1) {
-        int received = recv(sockfd, buffer, SIZE, 0);
+        int received = recv(sockfd, buffer, MAX_CHUNKSIZE, 0); n++;
         switch(received) {
-            case -1: printf("[-] Error in receiving data.\n"); return -1;
+            case -1: printf("[-] Error in receiving data.\n"); close(file); return -1;
             default: break;
         }
-        if (strcmp(buffer, "EOF") == 0) break;
-        char *timeStr = format_time();
-        fprintf(file, "%s", buffer);
-        bzero(buffer, SIZE);
-        n++;
+        if (buffer[received - 1] == '$')
+        {
+            write(file, buffer, received - 1);
+            break;
+        }
+        write(file, buffer, received);
+        memset(buffer, '\0', MAX_CHUNKSIZE);
     }
-    fclose(file);
+    close(file);
     return n;
 }
 
 int encrypt_file(const char *filename, const char *key)
 {
-    char enc_filename[SIZE];
-    snprintf(enc_filename, SIZE, "%s.enc", filename);
+    char enc_filename[MAX_CHUNKSIZE];
+    snprintf(enc_filename, MAX_CHUNKSIZE, "%s.enc", filename);
     FILE *encrypted_file = fopen(enc_filename, "w");
     FILE *file = fopen(filename, "r");
 
-    char buffer[SIZE] = {0};
-    char encrypted[SIZE] = {0};
+    char buffer[MAX_CHUNKSIZE] = {0};
+    char encrypted[MAX_CHUNKSIZE] = {0};
 
     char encrypt_map[KEYSIZE], decrypt_map[KEYSIZE];
     for (int i = 0; i < KEYSIZE; i++)
@@ -64,7 +73,7 @@ int encrypt_file(const char *filename, const char *key)
         decrypt_map[key[i] - 'A'] = 'A' + i;
     }
 
-    while (fgets(buffer, SIZE, file) != NULL)
+    while (fgets(buffer, MAX_CHUNKSIZE, file) != NULL)
     {
         for (int i = 0; buffer[i] != '\0'; i++)
         {
@@ -78,8 +87,8 @@ int encrypt_file(const char *filename, const char *key)
             }
         }
         fprintf(encrypted_file, "%s", encrypted);
-        bzero(buffer, SIZE);
-        bzero(encrypted, SIZE);
+        bzero(buffer, MAX_CHUNKSIZE);
+        bzero(encrypted, MAX_CHUNKSIZE);
     }
     fclose(file);
     fclose(encrypted_file);
@@ -88,79 +97,71 @@ int encrypt_file(const char *filename, const char *key)
 
 int send_encrypted_file(const char *filename, int sockfd, struct sockaddr_in addr)
 {
-    char enc_filename[SIZE];
-    snprintf(enc_filename, SIZE, "%s.enc", filename);
-    char buffer[SIZE] = {0};
-    FILE *file = fopen(enc_filename, "r");
-    while (fgets(buffer, SIZE, file) != NULL)
-    {
-        char *timeStr = format_time();
-        int sent = send(sockfd, buffer, SIZE, 0);
-        switch(sent) {
-            case -1: printf("[-] Error in sending data.\n"); return -1;
-            default: break;
-        }
-        memset(buffer, 0, SIZE);
+    char enc_filename[MAX_CHUNKSIZE];
+    snprintf(enc_filename, MAX_CHUNKSIZE, "%s.enc", filename);
+    int file = open(enc_filename, O_RDONLY);
+    if (file < 0) {
+        printf("[-] Error in opening encrypted file.\n");
+        return -1;
     }
 
-    strcpy(buffer, "EOF");
-    send(sockfd, buffer, strlen(buffer), 0);
-    fclose(file);
+    char buf[MAX_CHUNKSIZE];
+    memset(buf, '\0', sizeof(buf));
+    int read_bytes;
+    while ((read_bytes = read(file, buf, MAX_CHUNKSIZE)) > 0) 
+    {
+        int sent = send(sockfd, buf, read_bytes, 0);
+        switch(sent) {
+            case -1: printf("[-] Error in sending data.\n"); close(file); return -1;
+            default: break;
+        }
+        memset(buf, '\0', sizeof(buf));
+    }
+
+    strcpy(buf, "$");
+    int sent = send(sockfd, buf, strlen(buf), 0);
+    switch(sent) {
+        case -1: printf("[-] Error in sending data.\n"); close(file); return -1;
+        default: break;
+    }
+    close(file);
     return 0;
 }
 
 void handle_client(int newSocket, struct sockaddr_in newAddr, const char* clientname) 
 {
-    char _ENCRYPTION_KEY[KEYSIZE + 1];
-    int receive_key = recv(newSocket, _ENCRYPTION_KEY, KEYSIZE + 1, 0);
-    switch(receive_key) {
-        case -1: printf("[%s][-] Error in receiving encryption key.\n", clientname); exit(1);
-        default: printf("[%s][+] Encryption key received: %s\n", clientname, _ENCRYPTION_KEY); break;
-    }
-
-    char filename[SIZE];
-    memset(filename, 0, SIZE);
+    char filename[MAX_CHUNKSIZE];
+    memset(filename, 0, MAX_CHUNKSIZE);
     sprintf(filename, "%s.%d.txt", inet_ntoa(newAddr.sin_addr), ntohs(newAddr.sin_port));
 
     int stop = 0;
     do {
-        char file[SIZE];
-        int get_file = recv(newSocket, file, SIZE, 0);
-        file[get_file] = '\0';
-
-        if (strcmp(file, "NOT_FOUND") == 0) printf("[%s][-] FILE NOT FOUND!\n", clientname);
-        else {
-            int status = write_file(newSocket, newAddr, filename);
-            switch(status) {
-                case -1: printf("[%s][-] Error in writing file.\n", clientname); exit(1);
-                default: printf("[%s][+] %d packets transferred successfully.\n", clientname, status); break;
-            }
-
-            int encrypt = encrypt_file(filename, _ENCRYPTION_KEY);
-            switch(encrypt) {
-                case -1: printf("[%s][-] Error in encrypting file.\n", clientname); exit(1);
-                default: printf("[%s][+] File encrypted successfully.\n", clientname); break;
-            }
-
-            int send_status = send_encrypted_file(filename, newSocket, newAddr);
-            switch(send_status) {
-                case -1: printf("[%s][-] Error in sending encrypted file.\n", clientname); exit(1);
-                default: printf("[%s][+] Encrypted file sent successfully.\n", clientname); break;
-            }
+        char file[MAX_CHUNKSIZE];
+        char _ENCRYPTION_KEY[KEYSIZE + 1];
+        int receive_key = recv(newSocket, _ENCRYPTION_KEY, KEYSIZE + 1, 0);
+        switch(receive_key) {
+            case -1: printf("[%s][-] Error in receiving encryption key.\n", clientname); exit(1);
+            default: break;
         }
 
-        char response[SIZE];
-        memset(response, '\0', SIZE);
-        int recv_response = recv(newSocket, response, SIZE, 0);
-        if (recv_response == -1) { printf("[%s][-] Error in receiving response.\n", clientname); break; }
-        printf("[%s][+] Response received: %s\n", clientname, response);
-        response[recv_response] = '\0';
-        if (strcasecmp(response, "No") == 0) stop = 1;
+        int status = write_file(newSocket, newAddr, filename);
+        switch(status) {
+            case -1: printf("[%s][-] Error in writing file.\n", clientname); exit(1);
+            default: printf("[%s][+] %d packets transferred successfully.\n", clientname, status); break;
+        }
 
+        int encrypt = encrypt_file(filename, _ENCRYPTION_KEY);
+        switch(encrypt) {
+            case -1: printf("[%s][-] Error in encrypting file.\n", clientname); exit(1);
+            default: printf("[%s][+] File encrypted successfully.\n", clientname); break;
+        }
+
+        int send_status = send_encrypted_file(filename, newSocket, newAddr);
+        switch(send_status) {
+            case -1: printf("[%s][-] Error in sending encrypted file.\n", clientname); exit(1);
+            default: printf("[%s][+] Encrypted file sent successfully.\n\n", clientname); break;
+        }
     } while (stop == 0);
-
-    close(newSocket);
-    printf("[%s][+] Client disconnected.\n", clientname);
     exit(0);
 }
 
@@ -203,7 +204,7 @@ int main() {
 
         if (fork() == 0) {
             close(sockfd);
-            char clientname[SIZE];
+            char clientname[MAX_CHUNKSIZE];
             sprintf(clientname, "%s : %5d", inet_ntoa(newAddr.sin_addr), ntohs(newAddr.sin_port));
             handle_client(newSocket, newAddr ,clientname);
         } 
