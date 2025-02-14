@@ -1,60 +1,89 @@
 #ifndef KSOCKET_H
 #define KSOCKET_H
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <stdint.h>
+#include <errno.h>
+
 
 /*
- Definitions:
- =========================================================================
-    SOCK_KTP        - Special socket type for KTP
-    MAX_KTP_SOCKETS - Maximum number of KTP sockets
-    KTP_FD_BASE     - Base file descriptor number for KTP sockets
-    MESSAGE_SIZE    - Size of each message in the buffer
-    KTP_BUFFER_SIZE - Number of messages in the buffer
- =========================================================================
- */
-#define SOCK_KTP            9999
-#define MAX_KTP_SOCKETS     100
-#define KTP_FD_BASE         1000
-#define MESSAGE_SIZE        512
-#define KTP_BUFFER_SIZE     10
+====================================================================================================
+MACRO DEFINITIONS
+====================================================================================================
+| Macro Name       | Value | Description                                                           |
+----------------------------------------------------------------------------------------------------
+| SOCK_KTP         | 3     | Socket type for MTP (MTP socket)                                      |
+| BUFFER_SIZE      | 512   | Size of the buffer for sending and receiving messages                 |
+| T                | 5     | Timeout value for retransmission                                      |
+| p                | p     | Probability of dropping a message                                     |
+| N                | 25    | Number of MTP sockets that can be created                             |
+====================================================================================================
+
+*/
+
+#define SOCK_KTP 10087
+#define BUFFER_SIZE 512
+#define __MAX_RETRY__ 10
+#define p 0.05
+#define T 1
+#define N 25
+
 /*
- Error codes:
- =========================================================================
-    KTP_ENOSPACE    - No free slot in SM or send buffer full
-    KTP_ENOTBOUND   - Destination not matching bound destination
-    KTP_ENOMESSAGE  - No message available in recv buffer
-=========================================================================
- */
-#define KTP_ENOSPACE    1
-#define KTP_ENOTBOUND   2
-#define KTP_ENOMESSAGE  3
+SEGMENT FORMAT :
+Each segment has a 20 bit header.
 
-extern int ktp_errno;
+(a) First bit for type (0 = ACK, 1 = DATA)
+(b) Next 8 bit for sequence number (0 - 255)
+(c) Next 9 bits are rwnd size (for ACK) or data length(for DATA)
+(d) Next 512 bytes of data (for DATA)
 
-typedef struct
+-----------------------------------------------------------------
+| Index  | Description                                          |
+|--------|------------------------------------------------------|
+| 0      | Type bit (0 = ACK, 1 = DATA)                         |
+| 1 - 8  | Sequence number in 8-bit binary                      |
+| 9 - 17 | rwnd size in 9-bit binary (for ACK)                  |
+| 9 - 17 | Message length in 9-bit binary (for DATA)            |
+| 18 - x | Message data (Max 512 bytes)                         |
+=================================================================
+SIZE = 1 + 8 + 9 + 512 = 530 bytes (string encoding)
+-----------------------------------------------------------------
+*/
+typedef struct Segment
 {
-    int allocated;
-    pid_t owner;  
-    int udp_fd;   
+    uint8_t type;
+    uint8_t seq_num;
+    uint16_t len;
+    char data[512];
+} Segment;
 
-    struct sockaddr_in src_addr;  
-    struct sockaddr_in dest_addr; 
-    int bound;                    
-
-    char send_buffer[KTP_BUFFER_SIZE][MESSAGE_SIZE];
-    char recv_buffer[KTP_BUFFER_SIZE][MESSAGE_SIZE];
-    int send_count;
-    int recv_count; 
-} ktp_socket_t;
+void encode(struct Segment *seg, char *result);
+void decode(const char *str, struct Segment *seg);
 
 int k_socket(int domain, int type, int protocol);
-int k_bind(int ktp_fd, const struct sockaddr_in *src, const struct sockaddr_in *dest);
-ssize_t k_sendto(int ktp_fd, const void *buf, size_t len, int flags, const struct sockaddr_in *dest, socklen_t addrlen);
-ssize_t k_recvfrom(int ktp_fd, void *buf, size_t len, int flags, struct sockaddr_in *src, socklen_t *addrlen);
-int k_close(int ktp_fd);
+int k_bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+ssize_t k_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dst_addr, socklen_t addrlen);
+ssize_t k_recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
+int k_close(int sockfd);
 
-#endif // KSOCKET_H
+int dropMessage();
+int IP_check(char *ip);
+int PORT_check(char *port);
+void argcheck(int argc, char *argv[]);
+
+#endif  // KSOCKET_H

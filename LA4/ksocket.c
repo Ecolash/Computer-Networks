@@ -1,124 +1,186 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
 #include "ksocket.h"
+#include <assert.h>
+#include <signal.h>
+#include <sys/time.h>
 
-int ktp_errno = 0;
-static ktp_socket_t SM[MAX_KTP_SOCKETS];
+int timeout_flag = 0;
+void alarm_handler(int signo) {  timeout_flag = 1; }
 
-int dropMessage(float p)
+void encode(struct Segment *seg, char *result)
 {
-    float r = (float)rand() / (float)RAND_MAX;
-    if (r < p) return 1;
-    else return 0;
+    memset(result, 0, 530);
+    int len = seg->len - 1;
+    result[0] = seg->type ? '1' : '0';
+    for (int i = 0; i < 8; i++) result[1 + i] = ((seg->seq_num >> (7 - i)) & 1) ? '1' : '0';
+    for (int i = 0; i < 9; i++) result[9 + i] = ((len) >> (8 - i)) & 1 ? '1' : '0';
+    if (seg->type == 1) memcpy(result + 18, seg->data, seg->len);
 }
 
-static int allocate_sm_slot(void)
+void decode(const char *str, struct Segment *seg)
 {
-    for (int i = 0; i < MAX_KTP_SOCKETS; i++)
-    {
-        if (!SM[i].allocated)
-        {
-            SM[i].allocated = 1;
-            SM[i].owner = getpid();
-            SM[i].send_count = 0;
-            SM[i].recv_count = 0;
-            SM[i].bound = 0;
-            return i;
-        }
-    }
-    return -1;
-}
+    uint16_t val = 0;
+    seg->type = (str[0] == '1') ? 1 : 0;
+    seg->len = 0;
+    seg->seq_num = 0;
 
+    for (int i = 0; i < 8; i++) seg->seq_num = (seg->seq_num << 1) | (str[1 + i] - '0');
+    for (int i = 0; i < 9; i++) val = (val << 1) | (str[9 + i] - '0');
+    if (seg->type == 1) seg->len = val + 1;
 
-static int ktp_fd_to_index(int ktp_fd)
-{
-    int idx = ktp_fd - KTP_FD_BASE;
-    if (idx < 0 || idx >= MAX_KTP_SOCKETS || !SM[idx].allocated) return -1;
-    return idx;
+    if (seg->type == 1) memcpy(seg->data, str + 18, seg->len);
 }
 
 int k_socket(int domain, int type, int protocol)
 {
-    if (type != SOCK_KTP) { errno = EPROTOTYPE; return -1; }
-
-    int index = allocate_sm_slot();
-    if (index == -1) { ktp_errno = KTP_ENOSPACE; return -1; }
-
-    int udp_fd = socket(domain, SOCK_DGRAM, protocol);
-    if (udp_fd < 0) { SM[index].allocated = 0; return -1; }
-    SM[index].udp_fd = udp_fd;
-    return index + KTP_FD_BASE;
+    if (type != SOCK_KTP)
+    {
+        errno = EPROTOTYPE;
+        return -1;
+    }
+    return socket(domain, SOCK_DGRAM, protocol);
 }
 
-int k_bind(int ktp_fd, const struct sockaddr_in *src, const struct sockaddr_in *dest)
+int k_bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen) { return bind(sockfd, addr, addrlen); }
+int k_close(int sockfd) { return close(sockfd); }
+
+void send_segment(int sockfd, struct Segment *seg, const struct sockaddr *dst_addr, socklen_t addrlen)
 {
-    int idx = ktp_fd_to_index(ktp_fd);
-    if (idx < 0) { errno = EBADF; return -1; }
+    char encoded[530];
+    encode(seg, encoded);
+    if (!dropMessage())  sendto(sockfd, encoded, sizeof(encoded), 0, dst_addr, addrlen);
+}
 
-    ktp_socket_t *ks = &SM[idx];
-    if (bind(ks->udp_fd, (struct sockaddr *)src, sizeof(struct sockaddr_in)) < 0) return -1;
+int receive_ack(int sockfd, uint16_t expected_seq, struct Segment *seg,  const struct sockaddr *dst_addr, socklen_t addrlen)
+{
+    struct Segment ack;
+    char buffer[530];
+    struct timeval tv;
+    fd_set readfds;
+    int MAX_ATTEMPTS = __MAX_RETRY__; 
+    int retry_count = 0;
 
-    ks->src_addr.sin_family = src->sin_family;
-    ks->src_addr.sin_port = src->sin_port;
-    ks->src_addr.sin_addr.s_addr = src->sin_addr.s_addr;
-    memset(ks->src_addr.sin_zero, 0, sizeof(ks->src_addr.sin_zero));
+    while (retry_count < MAX_ATTEMPTS) {
+        FD_ZERO(&readfds);
+        FD_SET(sockfd, &readfds);
+        tv.tv_sec = T; 
+        tv.tv_usec = 0;
 
-    ks->dest_addr.sin_family = dest->sin_family;
-    ks->dest_addr.sin_port = dest->sin_port;
-    ks->dest_addr.sin_addr.s_addr = dest->sin_addr.s_addr;
-    memset(ks->dest_addr.sin_zero, 0, sizeof(ks->dest_addr.sin_zero));
+        int ready = select(sockfd + 1, &readfds, NULL, NULL, &tv);
+        
+        if (ready < 0) {
+            if (errno == EINTR) continue;  
+            return -1;  
+        }
+        
+        if (ready == 0) {  
+            printf("[-] TIMEOUT: Retransmitting... (%2d/%2d)\n",  retry_count + 1, MAX_ATTEMPTS);
+            send_segment(sockfd, seg, dst_addr, addrlen); 
+            retry_count++;
+            continue;
+        }
 
-    ks->bound = 1;
+        ssize_t received = recvfrom(sockfd, buffer, sizeof(buffer), 0, NULL, NULL);
+        if (received < 0) {
+            if (errno == EINTR) continue; 
+            return -1; 
+        }
+
+        decode(buffer, &ack);
+        if (ack.type == 0 && ack.seq_num == expected_seq) {
+            return 0;  
+        }
+    }
+
+    return -1;  
+}
+
+ssize_t k_sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dst_addr, socklen_t addrlen)
+{
+    static uint16_t seq_num = 0;  
+    struct Segment seg = {
+        .type = 1,
+        .seq_num = seq_num,
+        .len = len,
+        .data = {0}
+    };
+    memcpy(seg.data, buf, len);
+    send_segment(sockfd, &seg, dst_addr, addrlen);
+    
+    if (receive_ack(sockfd, seq_num, &seg, dst_addr, addrlen) < 0) {
+        errno = ETIMEDOUT;
+        return -1;
+    }
+
+    seq_num = (seq_num + 1) % 256;  
+    return len;
+}
+
+ssize_t k_recvfrom(int sockfd, void *buf, size_t len, int flags,  struct sockaddr *src_addr, socklen_t *addrlen)
+{
+    struct Segment seg;
+    char buffer[530];
+    static uint16_t expected_seq = 0; 
+
+    while (1) {
+        ssize_t received = recvfrom(sockfd, buffer, sizeof(buffer), 0, src_addr, addrlen);
+        if (received < 0) return -1;
+
+        decode(buffer, &seg);
+        if (seg.type == 1) {
+            struct Segment ack = {0, seg.seq_num, 0, {0}};
+            send_segment(sockfd, &ack, src_addr, *addrlen);
+
+            if (seg.seq_num == expected_seq) {
+                memcpy(buf, seg.data, (len < seg.len) ? len : seg.len);
+                expected_seq = (expected_seq + 1) % 256; 
+                return (len < seg.len) ? len : seg.len;
+            }
+            continue;
+        }
+        errno = ENOMSG;
+        return -1;
+    }
+}
+
+int dropMessage() {
+    double r = (double)rand() / (double)RAND_MAX;
+    if (r < p) return 1;
     return 0;
 }
 
-
-ssize_t k_sendto(int ktp_fd, const void *buf, size_t len, int flags, const struct sockaddr_in *dest, socklen_t addrlen)
+int IP_check(char *ip)
 {
-    int idx = ktp_fd_to_index(ktp_fd);
-    if (idx < 0) { errno = EBADF; return -1;}
+    struct sockaddr_in sa;
+    int check = inet_pton(AF_INET, ip, &(sa.sin_addr));
+    return (check != 0);
+}
 
-    ktp_socket_t *ks = &SM[idx];
-
-    if (!ks->bound){ ktp_errno = KTP_ENOTBOUND; return -1; }
-    if (dest->sin_addr.s_addr != ks->dest_addr.sin_addr.s_addr) { ktp_errno = KTP_ENOTBOUND; return -1; }
-    if (dest->sin_port != ks->dest_addr.sin_port) { ktp_errno = KTP_ENOTBOUND; return -1; }
-    if (ks->send_count >= KTP_BUFFER_SIZE) { ktp_errno = KTP_ENOSPACE; return -1; }
-    if (len != MESSAGE_SIZE) { errno = EMSGSIZE; return -1; }
-
-    for (size_t i = 0; i < MESSAGE_SIZE; i++) ks->send_buffer[ks->send_count][i] = ((char *)buf)[i];
-    ks->send_count++;
-
-    return (ssize_t)MESSAGE_SIZE;
+int PORT_check(char *port)
+{
+    int port_num = atoi(port);
+    int f1 = port_num < 0;
+    int f2 = port_num > 65535;
+    return !(f1 || f2);
 }
 
 
-ssize_t k_recvfrom(int ktp_fd, void *buf, size_t len, int flags, struct sockaddr_in *src, socklen_t *addrlen)
-{
-    int idx = ktp_fd_to_index(ktp_fd);
-    if (idx < 0) { errno = EBADF; return -1; }
+void argcheck(int argc, char *argv[]) {
+    if (argc != 5) {
+        printf("Usage: %s <src_IP> <src_port> <dst_IP> <dst_port>\n", argv[0]);
+        printf("-- <src_IP>    : Source IP address\n");
+        printf("-- <src_port>  : Source port number\n");
+        printf("-- <dst_IP>   : Destination IP address\n");
+        printf("-- <dst_port> : Destination port number\n");
+        exit(EXIT_FAILURE);
+    }
 
-    ktp_socket_t *ks = &SM[idx];
-    if (ks->recv_count == 0) { ktp_errno = KTP_ENOMESSAGE; return -1; }
-    if (len < MESSAGE_SIZE) { errno = EMSGSIZE; return -1; }
+    if (!IP_check(argv[1]) || !PORT_check(argv[2]) || !IP_check(argv[3]) || !PORT_check(argv[4])) {
+        if (!IP_check(argv[1]))   printf("[-] Invalid source IP address\n");
+        if (!IP_check(argv[3]))   printf("[-] Invalid destination IP address\n");
+        if (!PORT_check(argv[2])) printf("[-] Invalid source port number\n");
+        if (!PORT_check(argv[4])) printf("[-] Invalid destination port number\n");
 
-    for (size_t i = 0; i < MESSAGE_SIZE; i++) ((char *)buf)[i] = ks->recv_buffer[0][i];
-    if (src && addrlen && *addrlen >= sizeof(struct sockaddr_in)) memcpy(src, &ks->src_addr, sizeof(struct sockaddr_in));
-    for (int i = 1; i < ks->recv_count; i++) memcpy(ks->recv_buffer[i - 1], ks->recv_buffer[i], MESSAGE_SIZE);
-    ks->recv_count--;
-
-    return (ssize_t)MESSAGE_SIZE;
-}
-
-int k_close(int ktp_fd)
-{
-    int idx = ktp_fd_to_index(ktp_fd);
-    if (idx < 0) { errno = EBADF; return -1; }
-    ktp_socket_t *ks = &SM[idx];
-
-    close(ks->udp_fd);
-    memset(ks, 0, sizeof(ktp_socket_t));
-    return 0;
+        printf("\n[-] Terminating the program....\n");
+        exit(EXIT_FAILURE);
+    }
 }
