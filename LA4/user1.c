@@ -1,6 +1,18 @@
-// USER-1 (SENDER)
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <unistd.h>
 
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <fcntl.h>
 #include "ksocket.h"
+
+#define BUFFER_SIZE 512
+#define INPUT_FILE "test_200KB.txt"
 
 int main(int argc, char *argv[]) 
 {
@@ -16,88 +28,90 @@ int main(int argc, char *argv[])
     uint16_t src_port = atoi(argv[2]);
     uint16_t dst_port = atoi(argv[4]);
 
-    printf("[+] Source IP address      : %s\n", src_ip);
-    printf("[+] Source port number     : %d\n", src_port);
-    printf("[+] Destination IP address : %s\n", dst_ip);
+    printf("[+] Source IP address      : %s\n",   src_ip);
+    printf("[+] Source port number     : %d\n",   src_port);
+    printf("[+] Destination IP address : %s\n",   dst_ip);
     printf("[+] Destination port number: %d\n\n", dst_port);
 
     sADDR.sin_addr.s_addr = inet_addr(dst_ip);
     sADDR.sin_family = AF_INET;
     sADDR.sin_port = htons(dst_port);
-    
-    if ((sockfd = k_socket(AF_INET, SOCK_KTP, 0)) < 0) {
-        perror("[-] Socket creation failed");
-        return EXIT_FAILURE;
-    }
-    printf("[+] Socket created successfully\n");
+    sockfd = k_socket(AF_INET, SOCK_KTP, 0);
 
-    struct sockaddr_in bind_addr;
-    bind_addr.sin_family = AF_INET;
-    bind_addr.sin_addr.s_addr = inet_addr(src_ip);
-    bind_addr.sin_port = htons(src_port);
-
-    if (k_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
-        perror("[-] Binding failed");
-        return EXIT_FAILURE;
+    switch (sockfd) {
+        case -1: perror("[-] Socket creation failed"); return EXIT_FAILURE;
+        default: printf("[+] Socket created successfully\n");
     }
-    printf("[+] Binding successful\n");
+
+    int binded = k_bind(src_ip, src_port, dst_ip, dst_port);
+    switch (binded) {
+        case -1: perror("[-] Binding failed"); return EXIT_FAILURE;
+        default: printf("[+] Binding successful\n");
+    }
 
     char filename[256];
-    while(1) {
+    /*
+    while(1) 
+    {
         printf("[!] Enter the filename to send: ");
-        if (scanf("%255s", filename) != 1) {
-            printf("[-] Error reading filename\n");
-            continue;
-        }
+        scanf("%255s", filename);
         if (access(filename, F_OK) != -1) break;
-        printf("[-] File does not exist. Please enter a valid filename.\n");
-    }
-
+        else printf("[-] File does not exist. Please enter a valid filename.\n");
+    } */
+    strcpy(filename, INPUT_FILE);
     int fd = open(filename, O_RDONLY);
-    if (fd < 0) {
-        perror("[-] Failed to open file");
-        return EXIT_FAILURE;
-    }
-    printf("[+] File opened successfully\n");
 
-    buffer[0] = 'F';  
-    strcpy(buffer + 1, filename);
-    if (k_sendto(sockfd, buffer, strlen(filename) + 2, 0, (struct sockaddr*)&sADDR, sizeof(sADDR)) < 0) {
-        perror("[-] Failed to send filename");
-        close(fd);
-        return EXIT_FAILURE;
+    switch (fd) {
+        case -1: perror("[-] Failed to open file"); return EXIT_FAILURE;
+        default: printf("[+] File opened successfully\n");
     }
 
-    printf("[+] Starting file transmission\n");
-    int readlen;
-    int total_sent = 0;
-    int packets_sent = 0;
+    printf("[+] Starting file read and send process\n");
+    sleep(5); // Display messages 
 
-    while ((readlen = read(fd, buffer, BUFFER_SIZE - 1)) > 0) {
-        buffer[readlen] = '\0';  
-        int sendlen = k_sendto(sockfd, buffer, readlen, 0, (struct sockaddr*)&sADDR, sizeof(sADDR));
-        if (sendlen < 0) {
+    int readlen, seq = 1, packetcnt = 0;
+    buffer[0] = '0';
+
+    while ((readlen = read(fd, buffer + 1, BUFFER_SIZE - 1)) > 0) {
+        int sendlen;
+        while (1) {
+            while ((sendlen = k_sendto(sockfd, buffer, readlen + 1, 0, (struct sockaddr*)&sADDR, sizeof(sADDR))) < 0 && errno == ENOBUFS) {
+                printf("[*] BUFFER FULL . . . \n");
+                sleep(1);
+            }
+            if (sendlen >= 0) { printf("[+] SENT %d B [SEQ: %-3d]\n", sendlen, seq); break; }
             perror("[-] Failed to send data");
-            close(fd);
             return EXIT_FAILURE;
         }
 
-        total_sent += sendlen;
-        packets_sent++;
-        printf("[+] Packet %d sent: %d bytes\n", packets_sent, sendlen);
+        seq = (seq + 1) % 256;
+        packetcnt++;
     }
-    printf("\n");
 
     buffer[0] = '$';
-    if (k_sendto(sockfd, buffer, 1, 0, (struct sockaddr*)&sADDR, sizeof(sADDR)) < 0) {
-        perror("[-] Failed to send EOF marker");
-        close(fd);
+    while (1) {
+        int sendlen;
+        while ((sendlen = k_sendto(sockfd, buffer, 1, 0, (struct sockaddr*)&sADDR, sizeof(sADDR))) < 0 && errno == ENOBUFS) {
+            printf("[*] BUFFER FULL . . .\n");
+            sleep(1);
+        }
+
+        if (sendlen >= 0) {
+            packetcnt++;
+            printf("[+] EOF sent successfully. Total messages sent: %d\n", packetcnt);
+            break;
+        }
+        perror("[-] Failed to send EOF");
         return EXIT_FAILURE;
     }
 
-    printf("[+] File sent successfully (%d bytes in %d packets)\n", total_sent, packets_sent);
-    sleep(5);  
+    sleep(60); // Ensure all messages are sent
+    printf("[+] File sent successfully\n");
+    sleep(5);
     close(fd);
-    k_close(sockfd);
-    return EXIT_SUCCESS;
+
+    switch (k_close(sockfd)) {
+        case 0:  printf("[+] Socket closed successfully\n"); return EXIT_SUCCESS;
+        default: perror("[-] Failed to close socket!"); return EXIT_FAILURE;
+    }
 }

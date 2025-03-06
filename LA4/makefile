@@ -1,36 +1,70 @@
-# Makefile for ksocket project
 
-# Usage:
-# - make all: Compiles ksocket.c, user1.c, and user2.c, and creates the executables user1 and user2.
-# - make compile: Compiles only ksocket.c and creates the static library libksocket.a.
-# - make run: Runs user1 and user2 in separate xterm terminals.
-# - make clean: Removes all generated object files, executables, and temporary files.
+# COMMANDS:
 
-SRC_IP=127.0.0.1
-DEST_IP=127.0.0.1
-SRC_PORT=4030
-DEST_PORT=4031
+# user 1 and user 3 are the senders
+# user 2 and user 4 are the receivers
+# user 1 -----> user 2 (port 4031 to 4030)
+# user 3 -----> user 4 (port 4033 to 4032)
 
-all: compile run
+# - `make` or `make all`: Build all components.
+# - `make run1` / `make run2`: Run `user1` and `user2` (call on seperate terminals).
+# - `make run3` / `make run4`: Run `user3` and `user4` (call on seperate terminals).
+# - `make terminal`: Launch all users in separate xterm windows (requires xterm).
+# - `make clean`: Remove compiled binaries and temporary files.
 
-compile: libksocket.a user1 user2 
+CC = gcc
+CFLAGS = -Wall
+LIBRARY = libksocket.a
 
-libksocket.a: ksocket.c
-	gcc -Wall -c ksocket.c
-	ar rcs libksocket.a ksocket.o
+SRC_IP = 127.0.0.1
+DEST_IP = 127.0.0.1
+PORT1 = 4030
+PORT2 = 4031
+PORT3 = 4032
+PORT4 = 4033
 
-user1: user1.c libksocket.a
-	gcc -Wall -c user1.c
-	gcc -Wall -o user1 user1.o -L. -lksocket
+all: $(LIBRARY) initksocket user1 user2
 
-user2: user2.c libksocket.a
-	gcc -Wall -c user2.c
-	gcc -Wall -o user2 user2.o -L. -lksocket
+run1: user1
+	./user1 $(DEST_IP) $(PORT2) $(SRC_IP) $(PORT1)
 
-run: compile
-	rm -f new_$(SRC_PORT).txt
-	xterm -T "USER2" -fa "Monospace" -fs 10 -bg black -fg cyan -geometry 80x24+1000+0 -b 2 -e ./user2 $(SRC_IP) $(SRC_PORT) $(DEST_IP) $(DEST_PORT) &
-	xterm -T "USER1" -fa "Monospace" -fs 10 -bg black -fg cyan -geometry 80x24+0+0 -b 2 -e ./user1 $(DEST_IP) $(DEST_PORT) $(SRC_IP) $(SRC_PORT) &
+run2: user2
+	./user2 $(SRC_IP) $(PORT1) $(DEST_IP) $(PORT2)
+
+run3: user1
+	./user1 $(DEST_IP) $(PORT4) $(SRC_IP) $(PORT3)
+
+run4: user2
+	./user2 $(SRC_IP) $(PORT3) $(DEST_IP) $(PORT4)
+
+$(LIBRARY): ksocket.o
+	ar rcs $(LIBRARY) ksocket.o
+
+user1: user1.o $(LIBRARY)
+	$(CC) $(CFLAGS) -o user1 user1.o -L. -lksocket
+
+user1.o: user1.c ksocket.h
+	$(CC) $(CFLAGS) -c user1.c
+
+user2: user2.o $(LIBRARY)
+	$(CC) $(CFLAGS) -o user2 user2.o -L. -lksocket
+
+user2.o: user2.c ksocket.h
+	$(CC) $(CFLAGS) -c user2.c
+
+initksocket: initksocket.o $(LIBRARY)
+	$(CC) $(CFLAGS) -o initksocket initksocket.o -L. -lksocket -pthread
+
+initksocket.o: initksocket.c ksocket.h
+	$(CC) $(CFLAGS) -c initksocket.c
+
+ksocket.o: ksocket.c ksocket.h
+	$(CC) $(CFLAGS) -c ksocket.c
 
 clean:
-	rm -f *.o libksocket.a user1 user2 new_$(SRC_PORT).txt
+	rm -f *.o user1 user2 $(LIBRARY) initksocket new_$(PORT2).txt new_$(PORT4).txt
+
+terminal: all
+	xterm -T "INIT_KSOCKET" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 80x24+0+550 -b 2 -e ./initksocket & sleep 1; 
+	xterm -T "USER2" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 90x25+1000+0 -b 2 	 -e ./user2 $(SRC_IP) $(PORT1) $(DEST_IP) $(PORT2) & sleep 1; 
+	xterm -T "USER1" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 90x25+0+0 -b 2 	 -e ./user1 $(DEST_IP) $(PORT2) $(SRC_IP) $(PORT1) & sleep 1; 

@@ -1,6 +1,16 @@
-// USER-2 (RECEIVER)
-
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <unistd.h>
 #include "ksocket.h"
+
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+#include <time.h>
 
 int main(int argc, char *argv[]) 
 {
@@ -9,7 +19,7 @@ int main(int argc, char *argv[])
     int sockfd;
     struct sockaddr_in sADDR;
     char buffer[BUFFER_SIZE];
-    socklen_t addr_size = sizeof(sADDR);
+    socklen_t addr_size;
     char src_ip[16], dst_ip[16];
 
     strcpy(src_ip, argv[1]);
@@ -17,73 +27,73 @@ int main(int argc, char *argv[])
     uint16_t src_port = atoi(argv[2]);
     uint16_t dst_port = atoi(argv[4]);
 
-    printf("[+] Source IP address      : %s\n", src_ip);
-    printf("[+] Source port number     : %d\n", src_port);
-    printf("[+] Destination IP address : %s\n", dst_ip);
+    printf("[+] Source IP address      : %s\n",   src_ip);
+    printf("[+] Source port number     : %d\n",   src_port);
+    printf("[+] Destination IP address : %s\n",   dst_ip);
     printf("[+] Destination port number: %d\n\n", dst_port);
 
-    if ((sockfd = k_socket(AF_INET, SOCK_KTP, 0)) < 0) {
-        perror("[-] Socket creation failed");
-        return EXIT_FAILURE;
-    }
-    printf("[+] Socket created successfully\n");
+    sADDR.sin_family = AF_INET;
+    sADDR.sin_port = htons(dst_port);
+    sADDR.sin_addr.s_addr = inet_addr(dst_ip);
+    sockfd = k_socket(AF_INET, SOCK_KTP, 0);
 
-    struct sockaddr_in bind_addr;
-    bind_addr.sin_family = AF_INET;
-    bind_addr.sin_addr.s_addr = inet_addr(src_ip);
-    bind_addr.sin_port = htons(src_port);
-
-    if (k_bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
-        perror("[-] Binding failed");
-        return EXIT_FAILURE;
-    }
-    printf("[+] Binding successful\n");
-    printf("[+] Waiting for file transfer...\n\n");
-    
-
-    int recvlen = k_recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&sADDR, &addr_size);
-    if (recvlen <= 0) {
-        printf("[-] Failed to receive filename\n");
-        return EXIT_FAILURE;
+    switch (sockfd) {
+        case -1: perror("[-] Socket creation failed"); return EXIT_FAILURE;
+        default: printf("[+] Socket created successfully\n");
     }
 
-    char output_filename[270];
-    snprintf(output_filename, sizeof(output_filename), "new_%d.txt", src_port);
-
-    int fd = open(output_filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd < 0) {
-        perror("[-] Failed to open output file");
-        return EXIT_FAILURE;
+    int binded = k_bind(src_ip, src_port, dst_ip, dst_port);
+    switch (binded) {
+        case -1: perror("[-] Binding failed"); return EXIT_FAILURE;
+        default: printf("[+] Binding successful\n");
     }
-    printf("[+] Receiving file: %s\n\n", output_filename);
 
-    int total_received = 0;
-    int packets_received = 0;
+    char filename[100];
+    sprintf(filename, "new_%d.txt", src_port);
+    int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+
+    switch (fd) {
+        case -1: perror("[-] Failed to open file"); return EXIT_FAILURE;
+        default: printf("[+] File opened successfully\n");
+    }
+
+
+    printf("[+] Starting file reception process\n");
+
+    int recvlen;
+    time_t last = time(NULL);
 
     while (1) {
-        recvlen = k_recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&sADDR, &addr_size);
-        if (recvlen < 0) {
-            perror("[-] Error receiving data");
-            close(fd);
-            return EXIT_FAILURE;
+        while ((recvlen = k_recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&sADDR, &addr_size)) <= 0) {
+            double diff = difftime(time(NULL), last);
+            printf("[*] WAITING [%-3.2f seconds] \n", diff);
+            sleep(1);
+            if (diff > 1000) {
+                perror("[-] Timeout occurred");
+                return EXIT_FAILURE;
+            }
         }
 
-        if (recvlen == 1 && buffer[0] == '$') break; 
-        if (write(fd, buffer, recvlen) != recvlen) {
+        last = time(NULL);
+        if (buffer[0] == '$') {
+            printf("[+] End of file received\n");
+            break;
+        }
+        printf("[+] Received Packet [ SIZE: %-3d ] \n", recvlen);
+        if (write(fd, buffer + 1, recvlen - 1) < 0) {
             perror("[-] Failed to write to file");
-            close(fd);
             return EXIT_FAILURE;
         }
-
-        total_received += recvlen;
-        packets_received++;
-        printf("[+] Packet %d received: %d bytes\n", packets_received, recvlen);
     }
-    printf("\n");
 
-    printf("[+] File received successfully (%d bytes in %d packets)\n", total_received, packets_received);
-    sleep(5); 
     close(fd);
-    k_close(sockfd);
+    sleep(60); 
+    printf("[+] File received successfully\n");
+    sleep(5);
+
+    switch (k_close(sockfd)) {
+        case 0: printf("[+] Socket closed successfully\n"); break;
+        default: perror("[-] Failed to close socket"); return EXIT_FAILURE;
+    }
     return EXIT_SUCCESS;
 }

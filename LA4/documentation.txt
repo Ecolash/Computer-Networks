@@ -1,0 +1,293 @@
+TABLE : p v/s Avg No. of Transmissions
+
+File Size Used: 200KB (approx.)
+============================================================================================================
+| p      | No. of Messages | No. of Transmissions | Calculation                 | Avg No. of Transmissions |
+------------------------------------------------------------------------------------------------------------
+| 0.05   | 402             | 489                  | 489  / 402  = 1.216418      | 1.216418                 |
+| 0.10   | 402             | 569                  | 569  / 402  = 1.415423      | 1.415423                 |
+| 0.15   | 402             | 623                  | 623  / 402  = 1.549751      | 1.549751                 |
+| 0.20   | 402             | 657                  | 657  / 402  = 1.634328      | 1.634328                 |
+| 0.25   | 402             | 761                  | 761  / 402  = 1.892793      | 1.892793                 |
+| 0.30   | 402             | 842                  | 842  / 402  = 2.094527      | 2.094527                 |
+| 0.35   | 402             | 891                  | 891  / 402  = 2.216418      | 2.216418                 |
+| 0.40   | 402             | 1033                 | 1033 / 402  = 2.569652      | 2.569652                 |
+| 0.45   | 402             | 1094                 | 1094 / 402  = 2.721393      | 2.721393                 |
+| 0.50   | 402             | 1318                 | 1318 / 402  = 3.278607      | 3.278607                 |
+============================================================================================================
+
+Observation: 
+
+- As p increases, KTP socket requires more transmissions to successfully deliver all messages. 
+- This aligns with the theoretical expectation confirming that higher drop rates drastically impact efficiency.
+
+ksocket.h:
+MACRO DEFINITIONS
+----------------------------------------------------------------------------------------------------
+| Macro Name       | Value | Description                                                           |
+----------------------------------------------------------------------------------------------------
+| SOCK_KTP         | 5555  | Socket type for KTP (KTP socket)                                      |
+| BUFFER_SIZE      | 512   | Size of the buffer for sending and receiving messages                 |
+| T                | 5     | Timeout value for retransmission                                      |
+| p                | p     | Probability of dropping a message                                     |
+| N                | 25    | Number of KTP sockets that can be created                             |
+| P(s)             | -     | Decrements (locks) the semaphore 's' using the 'pop' structure        |
+| V(s)             | -     | Increments (unlocks) the semaphore 's' using the 'vop' structure      |
+| KEY_FILE         | -     | File used for generating keys for shared memory and semaphores        |
+----------------------------------------------------------------------------------------------------
+
+DATA STRUCTURES
+(1) WINDOW : STRUCTURE FOR MANAGING SEND AND RECEIVE WINDOWS
+
+- The WINDOW structure is designed to manage both send and receive windows. 
+- It consists of three things: wndw, size, and start_seq. 
+- The wndw field is an array that holds the sequence numbers to track packets have been sent or received. 
+- The size field indicates the size of the window, which determines how many packets can be managed at one time. 
+- The start_seq field represents the starting sequence number of the window, which helps in tracking the sequence of packets.
+
+----------------------------------------------------------------------------------------------------
+| S.No | Field Name                       | Description                                            |
+|------|----------------------------------|--------------------------------------------------------|
+| 1    | wndw                             | Array of sequence numbers for the window               |
+| 2    | size                             | Size of the window                                     |
+| 3    | start_seq                        | Start sequence number of the window                    |
+----------------------------------------------------------------------------------------------------
+
+(2) SM_ENTRY: SHARED MEMORY STRUCTURE FOR KTP SOCKET MANAGEMENT
+
+- The SM_ENTRY structure is used to manage KTP sockets in shared memory.
+- It contains various fields to store information about each KTP socket.
+- We declare an array of N = 15 SM entries.
+
+ ----------------------------------------------------------------------------------------------------
+ | S.No | Field Name                       | Description                                            |
+ |------|----------------------------------|--------------------------------------------------------|
+ | 1    | is_free                          | Indicates if KTP socket is free (1) or allocated (0)   |
+ | 2    | process_id                       | Process ID of the process that created the KTP socket  |
+ | 3    | udp_FD                           | UDP socket FD mapped to this KTP socket                |
+ | 4    | ip_address                       | IPv4 address of the remote endpoint                    |
+ | 5    | port                             | Port number of the remote endpoint                     |
+ | 6    | SEND_BUFFER                      | Circular send buffer (10 slots, each 512 bytes)        |
+ | 7    | SEND_BUFFER_SIZE                 | Current number of messages in the send buffer          |
+ | 8    | SEND_MSG_SIZES                   | Length of each message stored in the send buffer       |
+ | 9    | RECV_BUFFER                      | Circular receive buffer (5 slots, each 512 bytes)      |
+ | 10   | RECV_BUFFER_PTR                  | Index for the next message to read from recv buffer    |
+ | 11   | RECV_BUFFER_ISVALID              | Array of valid flag of each message in recv buffer     |
+ | 12   | RECV_MSG_SIZES                   | Length of each message stored in the receive buffer    |
+ | 13   | swnd                             | Send window for managing packet transmission           |
+ | 14   | rwnd                             | Receive window for managing incoming packets           |
+ | 15   | nospace                          | Flag indicating if recv buffer is full (1) or not (0)  |
+ | 16   | timer                            | Timestamp of last sent message for each sequence no    |
+ ----------------------------------------------------------------------------------------------------
+
+(3) SEGMENT: 
+
+- Structure to encode data and acknowledgement packets
+- Each segment has a 18 bit header.
+- Total size of a segment = 18 + 512 = 530 B  
+- The segment is encoded in form of a string while sending.
+
+(a) First byte for type (0 = ACK, 1 = DATA)
+(b) Next 8 bytes for sequence number (0 - 255)
+(c) Next 9 bytes are rwnd size (for ACK) or data length(for DATA)
+(d) Next 512 bytes of data (for DATA)
+
+-----------------------------------------------------------------
+| Index  | Description                                          |
+|--------|------------------------------------------------------|
+| 0      | Type (0 = ACK, 1 = DATA)                             |
+| 1 - 8  | Sequence number in 8 binary characters               |
+| 9 - 17 | rwnd size in 9 binary characters (for ACK)           |
+| 9 - 17 | Message length in 9 binary characters (for DATA)     |
+| 18 - x | Message data (Max 512 bytes)                         |
+-----------------------------------------------------------------
+SIZE = 1 + 8 + 9 + 512 = 530 bytes (string encoding)
+-----------------------------------------------------------------
+
+SHARED MEMORY: 
+================================================================================================
+| Shared Memory/Resource       | Purpose                                                       |
+================================================================================================
+| SM                           | Shared memory segment holding an array of SM_entry structs.   |
+| sock_info                    | Shared memory segment holding socket info (K_SOCKET).        |
+| shmid_sock_info              | ID of the shared memory segment holding socket info.          | 
+| shmid_SM                     | Shared memory segment holding an array of SM_entry structs    |
+| sem1, sem2                   | Semaphores used for synchronizing processes (signals).        |
+| sem_SM                       | Semaphore for protecting access to the SM shared memory.      |
+| sem_sock_info                | Semaphore for protecting access to the socket info memory.    |
+------------------------------------------------------------------------------------------------
+
+-- SM                  : stores session management data, with each SM_entry holding connection state info.
+-- sock_info           : stores socket info like socket ID, IP address, port, and error state.
+-- shmid_SM            : stores session management data, with each SM_entry holding connection state info.
+-- sem_SM              : ensures that only one process modifies the SM segment at a time.
+-- sem_sock_info       : ensures that socket metadata is not concurrently modified by multiple processes.
+
+Shared Memory Keys:
+
+(1) KEY_SHMID_SOCK_INFO : Key for shared memory segment holding socket info K_SOCKET.
+(2) KEY_SHMID_SM        : Key for shared memory segment holding an array of SM_entry structs.
+(3) KEY_SEM1            : Key for semaphore SEM1
+(4) KEY_SEM2            : Key for semaphore SEM2
+(5) KEY_SEM_SM          : Key for semaphore used for protecting access to the SM shared memory.
+(6) KEY_SEM_SOCK_INFO   : Key for semaphore used for protecting access to the socket info memory.
+
+ksocket.c:
+SEMAPHORES:
+===============================================================================
+| Variable            | Description                                           |
+|---------------------|-------------------------------------------------------|
+| int sem1            | Semaphore ID for general synchronization.             |
+| int sem2            | Semaphore ID for general synchronization.             |
+| int sem_sock_info   | Semaphore ID for socket information sync.             |
+| int sem_SM          | Semaphore ID for shared memory sync.                  |
+| int shmid_sock_info | Shared memory ID for socket information.              |
+| int shmid_SM        | Shared memory ID for general shared memory.           |
+| struct sembuf pop   | Semaphore operation structure for 'wait' (P) ops.     |
+| struct sembuf vop   | Semaphore operation structure for 'signal' (V) ops.   |
+===============================================================================
+
+pop and vop are used to perform wait and signal operations on the semaphores.
+pop = {0, -1, 0} => wait operation
+vop = {0, 1, 0}  => signal operation
+
+FUNCTIONS:
+
+1) int k_socket(int domain, int type, int protocol):
+   - Checks if the shared memory table has space for a new KTP socket.
+   - If space is available, it takes the first free entry and inserts details of the new KTP socket.
+   - Returns the KTP socket ID on success and -1 on failure.
+
+2) int k_bind(char src_ip[], uint16_t src_port, char dst_ip[], uint16_t dst_port):
+   - Binds the KTP socket with the source IP address and source port number.
+   - Stores details about the destination IP address and port number in the shared memory table.
+   - Returns 0 on success and -1 on failure.
+
+3) ssize_t k_sendto(int sockfd, const void *buf, size_t len, int flags, const SPTR dst_addr, socklen_t addrlen):
+   - Writes the message to the sender's message buffer if the destination IP/Port matches the bound IP/Port set through k_bind().
+   - If the send buffer is full, returns -1 with an error code (ENOBUFS).
+   - Returns the length of the sent message on success.
+
+4) ssize_t k_recvfrom(int sockfd, void *buf, size_t len, int flags, SPTR src_addr, socklen_t *addrlen):
+   - Checks the receiver-side message buffer to see if any message has been received.
+   - If a message is available, retrieves it in order and removes it from the buffer.
+   - If no message is available, returns -1 with an error code (ENOMSG).
+
+5) int k_close(int sockfd):
+   - Marks the specified socket as free in the shared memory table.
+   - Returns 0 on success.
+
+6) void encode(struct Segment *seg, char *result):
+   - Encodes a Segment structure into a string representation.
+   - Stores the segment type, sequence number, and either the receive window or the segment length.
+   - Copies the data field if the segment is of type 1.
+
+7) void decode(const char *str, struct Segment *seg):
+   - Decodes a string into a Segment structure.
+   - Extracts the segment type, sequence number, and either the receive window or the segment length.
+   - Copies the data field if the segment is of type 1.
+
+8) void access_SM():
+   - Initializes shared memory and semaphores for socket management.
+   - Attaches to shared memory segments and initializes required semaphores.
+   - Exits the program if shared memory or semaphores are unavailable.
+
+initksocket.c:
+GLOBAL VARIABLES:
+
+- numOfTransmissions: An integer variable that keeps track of the total number of transmissions that have occurred.
+- numOfMessages: An integer variable that counts the total number of messages that have been processed.
+- TransmissionPerMessage: A double variable that calculates the average number of transmissions per message.
+
+THREADS:
+ 3 threads to do the following tasks:
+
+- S_THREAD__ -> Thread handling sending of messages
+- R_THREAD__ -> Thread handling receiving of messages
+- G_THREAD__ -> Thread handling garbage collection of processes
+
+- The code also declares a thread attribute variable of type pthread_attr_t attr.
+- The function `pthread_attr_init(&attr)` initializes the thread attribute variable `attr` with default values.
+- The function `pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED)` sets the detach state attribute of `attr` to `PTHREAD_CREATE_DETACHED`.
+- This is done to ensure that they automatically release their resources when they terminate, without needing to be joined.
+
+ SEMAPHORE INITIALIZATION:
+
+- sem1 = 0 => Lock the process until the socket is allocated.
+- sem2 = 0 => Lock the process until the socket is binded.
+- sem_SM = 1 => Allow only one process to access the shared memory at a time.
+- sem_sock_info = 1 => Allow only one process to access the socket info at a time.
+
+G THREAD : GARBAGE COLLECTOR
+
+(1) Runs indefinitely
+(2) Periodically checks process status in the SM table after interval T.
+(3) Iterates through SM table: Marks entry as free if process is not running.
+
+S THREAD : SENDER THREAD
+
+(1) Runs indefinitely.
+(2) Sleeps for an interval of T/2.
+(3) Acquires access to the shared memory (SM) by locking the semaphore sem_SM.
+(4) Iterates over all entries in the SM table to check for active sockets.
+(5) Skips processing if the entry is marked as free.
+(6) Initializes a socket address structure (serv_addr) for the respective destination.
+(7) Checks for timeout conditions in the sender's sliding window.
+(8) Iterates over the send window range, checking timers for sent messages.
+(9) Determines if any message has exceeded the timeout threshold T.
+(10) If a timeout is detected, sets a flag to trigger retransmission.
+(11) Begins retransmission of all messages within the sender's window.
+(12) Retrieves message length and content from SEND_BUFFER.
+(13) Encapsulates data into a Segment structure, marking it as a DATA segment.
+(14) Encodes the segment into a byte array for network transmission.
+(15) Sends the segment over the UDP socket to the destination.
+(16) Updates the transmission count and sets a new timestamp for the message.
+(17) If no timeout occurred, checks for unsent messages in the send window.
+(18) Identifies messages that have not been transmitted (timer[j] == -1).
+(19) Constructs and sends unsent messages similarly to retransmission.
+(20) Updates counters for messages sent and transmissions performed.
+(21) Iterates through the remaining sequence numbers within the sliding window.
+(22) Ensures all pending messages are transmitted at least once.
+(23) Unlocks sem_SM to allow other threads to access the shared memory.
+
+R THREAD : RECEIVER
+
+(1) Runs indefinitely, continuously listening for incoming messages.
+(2) It uses select() to monitor multiple socket file descriptors (FDs) in READ_FDs with a timeout of T seconds.
+(3) If select() times out (no incoming data within T seconds):
+
+  - Resets READ_FDs and updates maxfd.
+  - Iterates over the shared memory (SM) to check active sockets.
+  - If a socket has space in its receive window (rwnd), marks it as having space (nospace = 0).
+  - Prepares and sends an acknowledgment (ACK) to the sender:
+  - Last in-order sequence number (last successfully received and ordered packet).
+  - Current receive window size (rwnd).
+  - Sends the ACK via sendto().
+
+(4) If data is received (select() detects activity on a socket):
+
+   - Iterates over SM to find the socket that has data (FD_ISSET()).
+   - Reads incoming data using recvfrom().
+   - If message loss simulation (dropMessage(p)) is enabled, skips processing.
+   - Decodes the received segment and checks its type:
+   - If segment is an ACK (type = 0):
+
+     > Extracts sequence number (seq) and receive window size (rwnd).
+     > Updates sender’s sliding window:
+     > Clears entries from the send window (swnd) that have been acknowledged.
+     > Updates start_seq to the next unacknowledged sequence number.
+     > Adjusts the sender’s window size (swnd.size).
+
+   - If segment is DATA (type = 1):
+     > Extracts sequence number (seq) and message length (len).
+     > If seq matches rwnd.start_seq (in-order message):
+     > Stores the message in the receive buffer (RECV_BUFFER).
+     > Updates buffer validity and receive window size.
+     > Searches for the next in-order message.
+     > If seq is out of order:
+     > Stores it if within the receive window (rwnd), else discards it.
+     > If it’s a duplicate, discards it.
+     > If receive window becomes full, sets nospace = 1.
+     > Sends an ACK for the last in-order received packet.
+
+
