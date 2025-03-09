@@ -12,18 +12,22 @@
 pthread_t S_THREAD__;
 pthread_t R_THREAD__;
 pthread_t G_THREAD__;
-
 int transmissionCnt = 0;
 
 // -- For DEBUGGING purposes
-
 void print_sock_info()
 {
-    printf("Socket ID: %d\n", sock_info->sock_id);
-    printf("Allocated: %d\n", sock_info->allocated);
-    printf("Error Number: %d\n", sock_info->err_no);
-    printf("IP Address: %s\n", sock_info->ip_address);
-    printf("Port: %d\n", sock_info->port);
+    int fd = sock_info->sock_id;
+    int port = sock_info->port;
+    int err = sock_info->err_no;
+    char *IP = sock_info->ip_address;
+    char *allocated = sock_info->allocated ? "Yes" : "No";
+
+    printf("\n+--------------------------------------+\n");
+    printf("| Socket ID   : %-3d | Allocated : %-3s  |\n", fd, allocated);
+    printf("| Error No    : %-3d | Port    : %-5d  |\n", err, port);
+    printf("| IP Address  : %-15s        |\n", IP);
+    printf("+--------------------------------------+\n\n");
 }
 
 void print_segment(struct Segment *seg)
@@ -39,24 +43,19 @@ void print_segment(struct Segment *seg)
 
 void release_mem(int sig)
 {
-    int c1 = pthread_cancel(S_THREAD__);
-    int c2 = pthread_cancel(R_THREAD__);
-    int c3 = pthread_cancel(G_THREAD__);
-    if (c1 + c2 + c3 < 0) perror("[-] Error canceling threads");
+    pthread_cancel(S_THREAD__);
+    pthread_cancel(R_THREAD__);
+    pthread_cancel(G_THREAD__);
 
-    int d1 = shmdt(sock_info);
-    int d2 = shmdt(SM);
-    if (d1 + d2 < 0) perror("[-] Error detaching shared memory segments");
+    shmdt(sock_info);
+    shmdt(SM);
 
-    int m1 = shmctl(shmid_SM, IPC_RMID, NULL);
-    int m2 = shmctl(shmid_sock_info, IPC_RMID, NULL);
-    if (m1 + m2 < 0) perror("[-] Error removing shared memory segments");
-
-    int k1 = semctl(sem1, 0, IPC_RMID);
-    int k2 = semctl(sem2, 0, IPC_RMID);
-    int k3 = semctl(SM_sem, 0, IPC_RMID);
-    int k4 = semctl(sock_info_sem, 0, IPC_RMID);
-    if (k1 + k2 + k3 + k4 < 0) perror("[-] Error removing semaphores");
+    shmctl(shmid_SM, IPC_RMID, NULL);
+    shmctl(shmid_sock_info, IPC_RMID, NULL);
+    semctl(sem1, 0, IPC_RMID);
+    semctl(sem2, 0, IPC_RMID);
+    semctl(SM_sem, 0, IPC_RMID);
+    semctl(sock_info_sem, 0, IPC_RMID);
 
     printf("\n[!] Number of transmissions: %d\n", transmissionCnt);
     printf("[+] Memory released successfully!\n");
@@ -92,54 +91,55 @@ while (1) {
         }
        
         if (timeout) {
-            printf("[!] TIMEOUT | RESENDING DATA\n");
+            printf("[!] TIMEOUT : RESENDING DATA\n");
             for (int j = start; j != end; j = (j + 1) % 256) {
-                if (SM[i].swnd.wndw[j] != -1) {
-                    int len = SM[i].SEND_MSG_SIZES[SM[i].swnd.wndw[j]];
-                    char *msg = SM[i].SEND_BUFFER[SM[i].swnd.wndw[j]];
+                int idx = SM[i].swnd.wndw[j];
+                if (idx == -1) continue;
+                int len = SM[i].SEND_MSG_SIZES[idx];
+                char *msg = SM[i].SEND_BUFFER[idx];
 
-                    Segment _DATA_SEG_;
-                    _DATA_SEG_.type = 1;
-                    _DATA_SEG_.seq_num = j;
-                    _DATA_SEG_.len = len;
-                    memcpy(_DATA_SEG_.data, msg, len);
+                Segment _DATA_SEG_;
+                _DATA_SEG_.type = 1;
+                _DATA_SEG_.seq_num = j;
+                _DATA_SEG_.len = len;
+                memcpy(_DATA_SEG_.data, msg, len);
 
-                    char segment[530];
-                    bzero(segment, 530);
-                    encode(&_DATA_SEG_, segment);
-                    // print_segment(&_DATA_SEG_);
+                char segment[530];
+                bzero(segment, 530);
+                encode(&_DATA_SEG_, segment);
+                // print_segment(&_DATA_SEG_);
 
-                    sendto(SM[i].udp_FD, segment, 530, 0, (SPTR)&serv_addr, sizeof(serv_addr));
-                    printf("[>] SENT [ DATA | SEQ = %-3d | LEN = %-4d]\n", j, len);
-                    transmissionCnt++;
-                    SM[i].timer[j] = time(NULL);
-                }
+                sendto(SM[i].udp_FD, segment, 530, 0, (SPTR)&serv_addr, sizeof(serv_addr));
+                printf("[>] SENT [ DATA | SEQ = %-3d | LEN = %-4d]\n", j, len);
+                transmissionCnt++;
+                SM[i].timer[j] = time(NULL);
             }
         } else {
             int start = SM[i].swnd.start_seq;
             int end = (start + SM[i].swnd.size) % 256;
-            for (int j = start; j != end; j = (j + 1) % 256) {
-                if (SM[i].swnd.wndw[j] != -1 && SM[i].timer[j] == -1) 
-                {
-                    int len = SM[i].SEND_MSG_SIZES[SM[i].swnd.wndw[j]];
-                    char *msg = SM[i].SEND_BUFFER[SM[i].swnd.wndw[j]];
-                    
-                    Segment _DATA_SEG_;
-                    _DATA_SEG_.type = 1;
-                    _DATA_SEG_.seq_num = j;
-                    _DATA_SEG_.len = len;
-                    memcpy(_DATA_SEG_.data, msg, len);
+            for (int j = start; j != end; j = (j + 1) % 256) 
+            {
+                int idx = SM[i].swnd.wndw[j];
+                if (idx == -1) continue;
+                if (SM[i].timer[j] != -1) continue;
+                int len = SM[i].SEND_MSG_SIZES[idx];
+                char *msg = SM[i].SEND_BUFFER[idx];
+                
+                Segment _DATA_SEG_;
+                _DATA_SEG_.type = 1;
+                _DATA_SEG_.seq_num = j;
+                _DATA_SEG_.len = len;
+                memcpy(_DATA_SEG_.data, msg, len);
 
-                    char segment[530];
-                    bzero(segment, 530);
-                    encode(&_DATA_SEG_, segment);
-                    // print_segment(&_DATA_SEG_);
+                char segment[530];
+                bzero(segment, 530);
+                encode(&_DATA_SEG_, segment);
+                // print_segment(&_DATA_SEG_);
 
-                    sendto(SM[i].udp_FD, segment, 530, 0, (SPTR)&serv_addr, sizeof(serv_addr));
-                    printf("[>] SENT [ DATA | SEQ = %-3d | LEN = %-4d]\n", j, len);
-                    transmissionCnt++;
-                    SM[i].timer[j] = time(NULL);
-                }
+                sendto(SM[i].udp_FD, segment, 530, 0, (SPTR)&serv_addr, sizeof(serv_addr));
+                printf("[>] SENT [ DATA | SEQ = %-3d | LEN = %-4d]\n", j, len);
+                transmissionCnt++;
+                SM[i].timer[j] = time(NULL);
             }
         }
     }
@@ -201,100 +201,101 @@ void *R() {
         } else {
             P(SM_sem);
             for (int i = 0; i < N; i++) {
-                if (FD_ISSET(SM[i].udp_FD, &PREV_FDs)) 
-                {
-                    // -- READ FROM SOCKET SM[i].udp_FD 
+            if (FD_ISSET(SM[i].udp_FD, &PREV_FDs)) 
+            {
+                // -- READ FROM SOCKET SM[i].udp_FD 
+                char buffer[530];
+                struct sockaddr_in cliaddr;
+                unsigned int len = sizeof(cliaddr);
+                int n = recvfrom(SM[i].udp_FD, buffer, 530, 0, (SPTR)&cliaddr, &len);
 
-                    char buffer[530];
-                    struct sockaddr_in cliaddr;
-                    unsigned int len = sizeof(cliaddr);
-                    int n = recvfrom(SM[i].udp_FD, buffer, 530, 0, (SPTR)&cliaddr, &len);
+                if (dropMessage()) continue;  // Drop message with probability p
+                if (n < 0) { perror("recvfrom()"); continue; }
+                
+                Segment segment;
+                decode(buffer, &segment);
+                int seq = segment.seq_num;
+                int type = segment.type;
 
-                    if (dropMessage()) continue;  
-                    if (n < 0) { perror("recvfrom()"); continue; }
-                    
-                    Segment segment;
-                    decode(buffer, &segment);
-                    int seq = segment.seq_num;
-                    int type = segment.type;
-
-                    switch (type) {
-                        case 0:  // SEGMENT TYPE: ACK
-                            int rwnd = segment.rwnd;
-                            printf("[<] RECV [ ACK  | SEQ = %-3d | RWND = %-3d]\n", seq, rwnd);
-
-                            if (SM[i].swnd.wndw[seq] >= 0) {
-                                int j = SM[i].swnd.start_seq;
-                                while (j != (seq + 1) % 256) {
-                                    SM[i].swnd.wndw[j] = -1;
-                                    SM[i].timer[j] = -1;
-                                    SM[i].SEND_BUFFER_SIZE++;
-                                    j = (j + 1) % 256;
-                                }
-                                SM[i].swnd.start_seq = (seq + 1) % 256;
-                            }
-                            SM[i].swnd.size = rwnd;
-                            break;
-                        
-                        case 1: // SEGMENT TYPE: DATA
-                            int len = segment.len;
-                            char data[512];
-                            memcpy(data, segment.data, len);
-                            printf("[<] RECV [ DATA | SEQ = %-3d | LEN = %-4d]\n", seq, len);
-
-                            if (seq == SM[i].rwnd.start_seq) {
-                                // In order message
-                                int buff_ind = SM[i].rwnd.wndw[seq];
-                                memcpy(SM[i].RECV_BUFFER[buff_ind], data, len);
-                                SM[i].RECV_BUFFER_ISVALID[buff_ind] = 1;
-                                SM[i].rwnd.size--;
-                                SM[i].RECV_MSG_SIZES[SM[i].rwnd.wndw[seq]] = len;
-
-                                // -- FIND NEXT IN-ORDER MESSAGE
-
-                                int curr = SM[i].rwnd.start_seq;
-                                int buff_idx = SM[i].rwnd.wndw[curr];
-                                int valid = SM[i].RECV_BUFFER_ISVALID[buff_idx];
-
-                                while (buff_idx >= 0 && valid == 1) {
-                                    curr = (curr + 1) % 256;
-                                    buff_idx = SM[i].rwnd.wndw[curr];
-                                    valid = SM[i].RECV_BUFFER_ISVALID[buff_idx];
-                                }
-
-                                SM[i].rwnd.start_seq = curr;
-
-                            } else {
-                                int buff_ind = SM[i].rwnd.wndw[seq];
-                                int is_valid = SM[i].RECV_BUFFER_ISVALID[buff_ind];
-                                if (buff_ind >= 0 && is_valid == 0) {
-                                    memcpy(SM[i].RECV_BUFFER[buff_ind], data, len);
-                                    SM[i].RECV_BUFFER_ISVALID[buff_ind] = 1;
-                                    SM[i].rwnd.size--;
-                                    SM[i].RECV_MSG_SIZES[buff_ind] = len;
-                                }
-                                else { printf("[-] DUPLICATE MESSAGE \n"); }
-                            }
-                            if (SM[i].rwnd.size == 0) SM[i].nospace = 1;   // Nospace in the receive window
-                            seq = (SM[i].rwnd.start_seq + 256 - 1) % 256;  // Last in-order message received
-
-                            Segment _ACK_SEG_;
-                            _ACK_SEG_.type = 0;
-                            _ACK_SEG_.seq_num = seq;
-                            _ACK_SEG_.rwnd = SM[i].rwnd.size;
-
-                            char ack[530];
-                            bzero(ack, 530);
-                            encode(&_ACK_SEG_, ack);
-                            sendto(SM[i].udp_FD, ack, 530, 0, (SPTR)&cliaddr, sizeof(cliaddr));
-                            printf("[>] SENT [ ACK  | SEQ = %-3d | RWND = %-3d]\n", seq, SM[i].rwnd.size);
-                            break;
-
-                        default: // SEGMENT TYPE: UNKNOWN 
-                            printf("[-] Unknown segment type received\n");
-                            break;
+                switch (type) {
+                case 0:  // SEGMENT TYPE: ACK
+                    int rwnd = segment.rwnd;
+                    printf("[<] RECV [ ACK  | SEQ = %-3d | RWND = %-3d]\n", seq, rwnd);
+                    if (SM[i].swnd.wndw[seq] >= 0) {
+                        int j = SM[i].swnd.start_seq;
+                        while (j != (seq + 1) % 256) {
+                            SM[i].swnd.wndw[j] = -1;
+                            SM[i].timer[j] = -1;
+                            SM[i].SEND_BUFFER_SIZE++;
+                            j = (j + 1) % 256;
+                        }
+                        SM[i].swnd.start_seq = (seq + 1) % 256;
                     }
+                    SM[i].swnd.size = rwnd;
+                    break;
+                
+                case 1: // SEGMENT TYPE: DATA
+                    int len = segment.len;
+                    char data[512];
+                    memcpy(data, segment.data, len);
+                    printf("[<] RECV [ DATA | SEQ = %-3d | LEN = %-4d]\n", seq, len);
+
+                    if (seq == SM[i].rwnd.start_seq) {
+                        // In order message
+                        int buff_ind = SM[i].rwnd.wndw[seq];
+                        memcpy(SM[i].RECV_BUFFER[buff_ind], data, len);
+                        SM[i].RECV_BUFFER_ISVALID[buff_ind] = 1;
+                        SM[i].rwnd.size--;
+                        SM[i].RECV_MSG_SIZES[SM[i].rwnd.wndw[seq]] = len;
+
+                        // -- FIND NEXT IN-ORDER MESSAGE
+
+                        int curr = SM[i].rwnd.start_seq;
+                        int posn = SM[i].rwnd.wndw[curr];
+                        int valid = SM[i].RECV_BUFFER_ISVALID[posn];
+                        while (posn >= 0) {
+                            if (valid != 1) break;
+                            curr = (curr + 1) % 256;
+                            posn = SM[i].rwnd.wndw[curr];
+                            valid = SM[i].RECV_BUFFER_ISVALID[posn];
+                        }
+                        SM[i].rwnd.start_seq = curr;
+                        // printf("[+] NEXT IN-ORDER MESSAGE: %d\n", curr);
+                    } else {
+                        int buff_ind = SM[i].rwnd.wndw[seq];
+                        int is_valid = SM[i].RECV_BUFFER_ISVALID[buff_ind];
+                        if (buff_ind >= 0 && is_valid == 0) {
+                            memcpy(SM[i].RECV_BUFFER[buff_ind], data, len);
+                            SM[i].RECV_BUFFER_ISVALID[buff_ind] = 1;
+                            SM[i].rwnd.size--;
+                            SM[i].RECV_MSG_SIZES[buff_ind] = len;
+                        }
+                        else { 
+                            // FOUND DUPLICATE MESSAGE ... drop it
+                            // print_segment(&segment);
+                            printf("[-] DROPPED DUPLICATE MESSAGE [SEQ: %-3d ] \n", seq); 
+                        }
+                    }
+                    if (SM[i].rwnd.size == 0) SM[i].nospace = 1;   // Nospace in the receive window
+                    seq = (SM[i].rwnd.start_seq + 256 - 1) % 256;  // Last in-order message received
+
+                    Segment _ACK_SEG_;
+                    _ACK_SEG_.type = 0;
+                    _ACK_SEG_.seq_num = seq;
+                    _ACK_SEG_.rwnd = SM[i].rwnd.size;
+
+                    char ack[530];
+                    bzero(ack, 530);
+                    encode(&_ACK_SEG_, ack);
+                    sendto(SM[i].udp_FD, ack, 530, 0, (SPTR)&cliaddr, sizeof(cliaddr));
+                    printf("[>] SENT [ ACK  | SEQ = %-3d | RWND = %-3d]\n", seq, SM[i].rwnd.size);
+                    break;
+
+                default: // SEGMENT TYPE: UNKNOWN 
+                    printf("[-] Unknown segment type received\n");
+                    break;
                 }
+            }
             }
             V(SM_sem);
         }
@@ -350,6 +351,7 @@ int main() {
     key_t K5 = KEY_SEM_SM;
     key_t K6 = KEY_SEM_SOCK_INFO;
 
+    // Get shared memory and semaphore IDs
     shmid_sock_info = shmget(K1, sizeof(K_SOCKET), 0666 | IPC_CREAT);
     shmid_SM = shmget(K2, sizeof(struct SM_entry) * N, 0666 | IPC_CREAT);
     sem1 = semget(K3, 1, 0666 | IPC_CREAT);
@@ -387,15 +389,15 @@ int main() {
     while (1) {
         P(sem1);
         P(sock_info_sem);
-
         if (sock_info->allocated == 0) {
             int sock_id = socket(AF_INET, SOCK_DGRAM, 0);
             if (sock_id == -1) 
             {
-                printf("[-] Error in creating UDP socket\n");
+                perror("[-] Error in creating UDP socket\n");
                 sock_info->sock_id = -1;
                 sock_info->allocated = 0;
                 sock_info->err_no = errno;
+                print_sock_info();
             } else 
             {
                 printf("[+] Socket created successfully\n");
@@ -416,9 +418,11 @@ int main() {
                 sock_info->sock_id = -1;
                 sock_info->allocated = 0;
                 sock_info->err_no = errno;
+                print_sock_info();
             } else 
             {
                 printf("[+] Socket binded successfully\n");
+                print_sock_info();
                 sock_info->allocated = 2;
             }
         }

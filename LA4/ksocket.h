@@ -207,6 +207,7 @@ int k_close(int sockfd);
 int dropMessage();
 int IP_check(char *ip);
 int PORT_check(char *port);
+int PORT_check2(uint16_t port);
 void argcheck(int argc, char *argv[]);
 
 #endif  

@@ -187,7 +187,7 @@ FUNCTIONS:
    - Extracts the segment type, sequence number, and either the receive window or the segment length.
    - Copies the data field if the segment is of type 1.
 
-8) void access_SM():
+8) int access_SM():
    - Initializes shared memory and semaphores for socket management.
    - Attaches to shared memory segments and initializes required semaphores.
    - Exits the program if shared memory or semaphores are unavailable.
@@ -235,20 +235,24 @@ S THREAD : SENDER THREAD
 (7) Checks for timeout conditions in the sender's sliding window.
 (8) Iterates over the send window range, checking timers for sent messages.
 (9) Determines if any message has exceeded the timeout threshold T.
-(10) If a timeout is detected, sets a flag to trigger retransmission.
-(11) Begins retransmission of all messages within the sender's window.
-(12) Retrieves message length and content from SEND_BUFFER.
-(13) Encapsulates data into a Segment structure, marking it as a DATA segment.
-(14) Encodes the segment into a byte array for network transmission.
-(15) Sends the segment over the UDP socket to the destination.
-(16) Updates the transmission count and sets a new timestamp for the message.
-(17) If no timeout occurred, checks for unsent messages in the send window.
-(18) Identifies messages that have not been transmitted (timer[j] == -1).
-(19) Constructs and sends unsent messages similarly to retransmission.
-(20) Updates counters for messages sent and transmissions performed.
-(21) Iterates through the remaining sequence numbers within the sliding window.
-(22) Ensures all pending messages are transmitted at least once.
-(23) Unlocks SM_sem to allow other threads to access the shared memory.
+
+(10) If a timeout is detected:
+   > Sets a flag to trigger retransmission.
+   > Begins retransmission of all messages within the sender's window.
+   > Retrieves message length and content from SEND_BUFFER.
+   > Encapsulates data into a Segment structure, marking it as a DATA segment.
+   > Encodes the segment into a byte array for network transmission.
+   > Sends the segment over the UDP socket to the destination.
+   > Updates the transmission count and sets a new timestamp for the message.
+
+(11) If no timeout occurred:
+   > Checks for unsent messages in the send window.
+   > Identifies messages that have not been transmitted (timer[j] == -1).
+   > Constructs and sends unsent messages similarly to retransmission.
+   > Updates counters for messages sent and transmissions performed.
+   > Iterates through the remaining sequence numbers within the sliding window.
+   > Ensures all pending messages are transmitted at least once.
+   > Unlocks SM_sem to allow other threads to access the shared memory.
 
 R THREAD : RECEIVER
 
