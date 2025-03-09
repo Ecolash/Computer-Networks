@@ -67,18 +67,21 @@ int main(int argc, char *argv[])
     }
 
     printf("[+] Starting file read and send process\n");
-    sleep(5); // Display messages 
+    sleep(2); // Display messages 
 
     int readlen, seq = 1, packetcnt = 0;
     buffer[0] = '0';
 
     while ((readlen = read(fd, buffer + 1, BUFFER_SIZE - 1)) > 0) {
         int sendlen;
+        int buffer_full = 0;
         while (1) {
             while ((sendlen = k_sendto(sockfd, buffer, readlen + 1, 0, (struct sockaddr*)&sADDR, sizeof(sADDR))) < 0 && errno == ENOBUFS) {
-                printf("[*] BUFFER FULL . . . \n");
+                if (buffer_full == 0) {printf("[*] BUFFER FULL"); fflush(stdout); buffer_full = 1;}
+                else {printf(" ."); fflush(stdout);}
                 sleep(1);
             }
+            if (buffer_full) printf("\n");
             if (sendlen >= 0) { printf("[+] SENT %d B [SEQ: %-3d]\n", sendlen, seq); break; }
             perror("[-] Failed to send data");
             return EXIT_FAILURE;
@@ -91,11 +94,13 @@ int main(int argc, char *argv[])
     buffer[0] = '$';
     while (1) {
         int sendlen;
+        int buffer_full = 0;
         while ((sendlen = k_sendto(sockfd, buffer, 1, 0, (struct sockaddr*)&sADDR, sizeof(sADDR))) < 0 && errno == ENOBUFS) {
-            printf("[*] BUFFER FULL . . .\n");
+            if (buffer_full == 0) {printf("[*] BUFFER FULL"); fflush(stdout); buffer_full = 1;}
+            else {printf(" ."); fflush(stdout);}
             sleep(1);
         }
-
+        if (buffer_full) printf("\n");
         if (sendlen >= 0) {
             packetcnt++;
             printf("[+] EOF sent successfully. Total messages sent: %d\n", packetcnt);

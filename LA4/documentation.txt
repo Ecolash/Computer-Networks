@@ -113,15 +113,15 @@ SHARED MEMORY:
 | shmid_sock_info              | ID of the shared memory segment holding socket info.          | 
 | shmid_SM                     | Shared memory segment holding an array of SM_entry structs    |
 | sem1, sem2                   | Semaphores used for synchronizing processes (signals).        |
-| sem_SM                       | Semaphore for protecting access to the SM shared memory.      |
-| sem_sock_info                | Semaphore for protecting access to the socket info memory.    |
+| SM_sem                       | Semaphore for protecting access to the SM shared memory.      |
+| sock_info_sem                | Semaphore for protecting access to the socket info memory.    |
 ------------------------------------------------------------------------------------------------
 
 -- SM                  : stores session management data, with each SM_entry holding connection state info.
 -- sock_info           : stores socket info like socket ID, IP address, port, and error state.
 -- shmid_SM            : stores session management data, with each SM_entry holding connection state info.
--- sem_SM              : ensures that only one process modifies the SM segment at a time.
--- sem_sock_info       : ensures that socket metadata is not concurrently modified by multiple processes.
+-- SM_sem              : ensures that only one process modifies the SM segment at a time.
+-- sock_info_sem       : ensures that socket metadata is not concurrently modified by multiple processes.
 
 Shared Memory Keys:
 
@@ -139,8 +139,8 @@ SEMAPHORES:
 |---------------------|-------------------------------------------------------|
 | int sem1            | Semaphore ID for general synchronization.             |
 | int sem2            | Semaphore ID for general synchronization.             |
-| int sem_sock_info   | Semaphore ID for socket information sync.             |
-| int sem_SM          | Semaphore ID for shared memory sync.                  |
+| int sock_info_sem   | Semaphore ID for socket information sync.             |
+| int SM_sem          | Semaphore ID for shared memory sync.                  |
 | int shmid_sock_info | Shared memory ID for socket information.              |
 | int shmid_SM        | Shared memory ID for general shared memory.           |
 | struct sembuf pop   | Semaphore operation structure for 'wait' (P) ops.     |
@@ -195,7 +195,7 @@ FUNCTIONS:
 initksocket.c:
 GLOBAL VARIABLES:
 
-- numOfTransmissions: An integer variable that keeps track of the total number of transmissions that have occurred.
+- transmissionCnt: An integer variable that keeps track of the total number of transmissions that have occurred.
 - numOfMessages: An integer variable that counts the total number of messages that have been processed.
 - TransmissionPerMessage: A double variable that calculates the average number of transmissions per message.
 
@@ -215,8 +215,8 @@ THREADS:
 
 - sem1 = 0 => Lock the process until the socket is allocated.
 - sem2 = 0 => Lock the process until the socket is binded.
-- sem_SM = 1 => Allow only one process to access the shared memory at a time.
-- sem_sock_info = 1 => Allow only one process to access the socket info at a time.
+- SM_sem = 1 => Allow only one process to access the shared memory at a time.
+- sock_info_sem = 1 => Allow only one process to access the socket info at a time.
 
 G THREAD : GARBAGE COLLECTOR
 
@@ -228,7 +228,7 @@ S THREAD : SENDER THREAD
 
 (1) Runs indefinitely.
 (2) Sleeps for an interval of T/2.
-(3) Acquires access to the shared memory (SM) by locking the semaphore sem_SM.
+(3) Acquires access to the shared memory (SM) by locking the semaphore SM_sem.
 (4) Iterates over all entries in the SM table to check for active sockets.
 (5) Skips processing if the entry is marked as free.
 (6) Initializes a socket address structure (serv_addr) for the respective destination.
@@ -248,7 +248,7 @@ S THREAD : SENDER THREAD
 (20) Updates counters for messages sent and transmissions performed.
 (21) Iterates through the remaining sequence numbers within the sliding window.
 (22) Ensures all pending messages are transmitted at least once.
-(23) Unlocks sem_SM to allow other threads to access the shared memory.
+(23) Unlocks SM_sem to allow other threads to access the shared memory.
 
 R THREAD : RECEIVER
 

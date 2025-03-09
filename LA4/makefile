@@ -7,9 +7,10 @@
 # user 3 -----> user 4 (port 4033 to 4032)
 
 # - `make` or `make all`: Build all components.
+# - `make socket`: Initialize the ksocket module.
 # - `make run1` / `make run2`: Run `user1` and `user2` (call on seperate terminals).
 # - `make run3` / `make run4`: Run `user3` and `user4` (call on seperate terminals).
-# - `make terminal`: Launch all users in separate xterm windows (requires xterm).
+# - `make terminal`: Launch all users in separate xterm windows (requirement: xterm).
 # - `make clean`: Remove compiled binaries and temporary files.
 
 CC = gcc
@@ -24,6 +25,9 @@ PORT3 = 4032
 PORT4 = 4033
 
 all: $(LIBRARY) initksocket user1 user2
+
+make socket:
+	./initksocket
 
 run1: user1
 	./user1 $(DEST_IP) $(PORT2) $(SRC_IP) $(PORT1)
@@ -66,5 +70,5 @@ clean:
 
 terminal: all
 	xterm -T "INIT_KSOCKET" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 80x24+0+550 -b 2 -e ./initksocket & sleep 1; 
-	xterm -T "USER2" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 90x25+1000+0 -b 2 	 -e ./user2 $(SRC_IP) $(PORT1) $(DEST_IP) $(PORT2) & sleep 1; 
-	xterm -T "USER1" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 90x25+0+0 -b 2 	 -e ./user1 $(DEST_IP) $(PORT2) $(SRC_IP) $(PORT1) & sleep 1; 
+	xterm -T "USER2" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 90x25+1000+0 -b 2 	 -e ./user2 $(SRC_IP) $(PORT1) $(DEST_IP) $(PORT2) &
+	xterm -T "USER1" -fa "Monospace" -fs 12 -bg black -fg cyan -geometry 90x25+0+0 -b 2 	 -e ./user1 $(DEST_IP) $(PORT2) $(SRC_IP) $(PORT1); 

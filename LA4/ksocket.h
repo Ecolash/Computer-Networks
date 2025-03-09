@@ -178,20 +178,20 @@ typedef struct Segment
 | shmid_sock_info              | ID of the shared memory segment holding socket info.          | 
 | shmid_SM                     | Shared memory segment holding an array of SM_entry structs    |
 | sem1, sem2                   | Semaphores used for synchronizing processes (signals).        |
-| sem_SM                       | Semaphore for protecting access to the SM shared memory.      |
-| sem_sock_info                | Semaphore for protecting access to the socket info memory.    |
+| SM_sem                       | Semaphore for protecting access to the SM shared memory.      |
+| sock_info_sem                | Semaphore for protecting access to the socket info memory.    |
 ------------------------------------------------------------------------------------------------
 
 -- SM                  : stores session management data, with each SM_entry holding connection state info.
 -- sock_info           : stores socket info like socket ID, IP address, port, and error state.
 -- shmid_SM            : stores session management data, with each SM_entry holding connection state info.
--- sem_SM              : ensures that only one process modifies the SM segment at a time.
--- sem_sock_info       : ensures that socket metadata is not concurrently modified by multiple processes.
+-- SM_sem              : ensures that only one process modifies the SM segment at a time.
+-- sock_info_sem       : ensures that socket metadata is not concurrently modified by multiple processes.
 */
 extern struct SM_entry *SM;
 extern K_SOCKET* sock_info;
 extern int sem1, sem2;
-extern int sem_sock_info, sem_SM;
+extern int sock_info_sem, SM_sem;
 extern int shmid_sock_info, shmid_SM;
 extern struct sembuf pop, vop;
 

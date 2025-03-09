@@ -48,37 +48,33 @@ int main(int argc, char *argv[])
         default: printf("[+] Binding successful\n");
     }
 
+    int recvlen;
     char filename[100];
+    time_t last = time(NULL);
     sprintf(filename, "new_%d.txt", src_port);
     int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-
     switch (fd) {
         case -1: perror("[-] Failed to open file"); return EXIT_FAILURE;
         default: printf("[+] File opened successfully\n");
     }
 
-
-    printf("[+] Starting file reception process\n");
-
-    int recvlen;
-    time_t last = time(NULL);
-
+    printf("[+] Starting file transfer process...\n");
     while (1) {
+        int waiting = 0;
         while ((recvlen = k_recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&sADDR, &addr_size)) <= 0) {
             double diff = difftime(time(NULL), last);
-            printf("[*] WAITING [%-3.2f seconds] \n", diff);
+            if (waiting == 0) { printf("[!] WAITING"); fflush(stdout); waiting = 1;}
+            else {printf(" ."); fflush(stdout);}
             sleep(1);
             if (diff > 1000) {
                 perror("[-] Timeout occurred");
                 return EXIT_FAILURE;
             }
         }
-
+        if (waiting) printf("\n");
         last = time(NULL);
-        if (buffer[0] == '$') {
-            printf("[+] End of file received\n");
-            break;
-        }
+        
+        if (buffer[0] == '$') { printf("[+] End of file received\n"); break; }
         printf("[+] Received Packet [ SIZE: %-3d ] \n", recvlen);
         if (write(fd, buffer + 1, recvlen - 1) < 0) {
             perror("[-] Failed to write to file");

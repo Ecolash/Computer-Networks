@@ -10,8 +10,8 @@ K_SOCKET * sock_info;
 |---------------------|-------------------------------------------------------|
 | int sem1            | Semaphore ID for general synchronization.             |
 | int sem2            | Semaphore ID for general synchronization.             |
-| int sem_sock_info   | Semaphore ID for socket information sync.             |
-| int sem_SM          | Semaphore ID for shared memory sync.                  |
+| int sock_info_sem   | Semaphore ID for socket information sync.             |
+| int SM_sem          | Semaphore ID for shared memory sync.                  |
 | int shmid_sock_info | Shared memory ID for socket information.              |
 | int shmid_SM        | Shared memory ID for general shared memory.           |
 | struct sembuf pop   | Semaphore operation structure for 'wait' (P) ops.     |
@@ -24,7 +24,7 @@ vop = {0, 1, 0}  => signal operation
 
  */
 int sem1, sem2;
-int sem_sock_info, sem_SM;
+int sock_info_sem, SM_sem;
 int shmid_sock_info, shmid_SM;
 
 struct sembuf pop = {0, -1, 0};
@@ -65,12 +65,12 @@ void access_SM() {
 
     shmid_sock_info = shmget(K1, sizeof(K_SOCKET), 0666);
     shmid_SM = shmget(K2, sizeof(struct SM_entry)*N, 0666);
-    sem_sock_info = semget(K6, 1, 0666);
-    sem_SM = semget(K5, 1, 0666);
+    sock_info_sem = semget(K6, 1, 0666);
+    SM_sem = semget(K5, 1, 0666);
     sem1 = semget(K3, 1, 0666);
     sem2 = semget(K4, 1, 0666);
 
-    if (shmid_sock_info == -1 || shmid_SM == -1 || sem1 == -1 || sem2 == -1 || sem_sock_info == -1 || sem_SM == -1) {
+    if (shmid_sock_info == -1 || shmid_SM == -1 || sem1 == -1 || sem2 == -1 || sock_info_sem == -1 || SM_sem == -1) {
         perror("[-] Error in getting shared memory or semaphore. Maybe initprocess is not running.");
         exit(1);
     }
@@ -88,36 +88,36 @@ int k_socket(int domain, int type, int protocol)
     
     // -- FIND A FREE SOCKET
     int KSOCK_ID = -1;
-    P(sem_sock_info);
-    P(sem_SM);
+    P(sock_info_sem);
+    P(SM_sem);
     for (int i = 0; i < N; i++) if (SM[i].is_free) { KSOCK_ID = i; break; }
-    V(sem_SM);
+    V(SM_sem);
 
     // -- NO FREE SOCKET FOUND
     if (KSOCK_ID == -1) {
         errno = ENOBUFS;
         sock_info->err_no = errno;
         sock_info->allocated = 0;
-        V(sem_sock_info);
+        V(sock_info_sem);
         return -1;
     }
 
-    V(sem_sock_info);
+    V(sock_info_sem);
     V(sem1);
 
     // -- FREE SOCKET FOUND - Allocate the socket
     P(sem2);
-    P(sem_sock_info);
+    P(sock_info_sem);
     if (sock_info->sock_id == -1)
     {
         errno = sock_info->err_no;
         sock_info->allocated = 0;
-        V(sem_sock_info);
+        V(sock_info_sem);
         return -1;
     }
-    V(sem_sock_info);
+    V(sock_info_sem);
 
-    P(sem_SM);
+    P(SM_sem);
     SM[KSOCK_ID].is_free = 0;
     SM[KSOCK_ID].process_id = getpid();
     SM[KSOCK_ID].udp_FD = sock_info->sock_id;
@@ -139,28 +139,28 @@ int k_socket(int domain, int type, int protocol)
     for (int j = 0; j < 10; j++) SM[KSOCK_ID].RECV_BUFFER_ISVALID[j] = 0;
     SM[KSOCK_ID].RECV_BUFFER_PTR = 0;
     SM[KSOCK_ID].nospace = 0;
-    V(sem_SM);
+    V(SM_sem);
 
-    P(sem_sock_info);
+    P(sock_info_sem);
     sock_info->allocated = 0;
-    V(sem_sock_info);
+    V(sock_info_sem);
 
     return KSOCK_ID; 
 }
 
 int k_bind(char src_ip[], uint16_t src_port, char dst_ip[], uint16_t dst_port) {
     access_SM();
-    P(sem_SM);
+    P(SM_sem);
     int KSOCK_ID = -1;
     for (int i = 0; i < N && KSOCK_ID == -1; i++)
         if (!SM[i].is_free && SM[i].process_id == getpid()) KSOCK_ID = i;
 
-    P(sem_sock_info);
+    P(sock_info_sem);
     if (KSOCK_ID == -1) {
         errno = ENOBUFS;
         sock_info->allocated = 0;
-        V(sem_SM);
-        V(sem_sock_info);
+        V(SM_sem);
+        V(sock_info_sem);
         return -1;
     }
 
@@ -168,28 +168,28 @@ int k_bind(char src_ip[], uint16_t src_port, char dst_ip[], uint16_t dst_port) {
     sock_info->sock_id = SM[KSOCK_ID].udp_FD;
     strcpy(sock_info->ip_address, src_ip);
     sock_info->port = src_port;
-    V(sem_sock_info); 
+    V(sock_info_sem); 
     V(sem1);
 
     P(sem2); 
-    P(sem_sock_info);
+    P(sock_info_sem);
     if (sock_info->sock_id == -1)
     {
         errno = sock_info->err_no;
         sock_info->allocated = 0;
-        V(sem_sock_info);
-        V(sem_SM);
+        V(sock_info_sem);
+        V(SM_sem);
         return -1;
     }
-    V(sem_sock_info);
+    V(sock_info_sem);
 
     strcpy(SM[KSOCK_ID].ip_address, dst_ip);
     SM[KSOCK_ID].port = dst_port;
-    V(sem_SM);
+    V(SM_sem);
 
-    P(sem_sock_info);
+    P(sock_info_sem);
     sock_info->allocated = 0;
-    V(sem_sock_info);
+    V(sock_info_sem);
 
     return 0;
 }
@@ -197,20 +197,20 @@ int k_bind(char src_ip[], uint16_t src_port, char dst_ip[], uint16_t dst_port) {
 
 ssize_t k_sendto(int k_sockfd, const void *buf, size_t len, int flags, const SPTR dst_addr, socklen_t addrlen) {
     access_SM(); 
-    P(sem_SM);
+    P(SM_sem);
     struct sockaddr_in *addr_in = (struct sockaddr_in *)dst_addr;
     char *dst_ip = inet_ntoa(addr_in->sin_addr);
     uint16_t dst_port = ntohs(addr_in->sin_port);
 
     if (strcmp(SM[k_sockfd].ip_address, dst_ip) || SM[k_sockfd].port != dst_port) {
         errno = ENOTCONN;
-        V(sem_SM);
+        V(SM_sem);
         return -1;
     }
 
     if (SM[k_sockfd].SEND_BUFFER_SIZE == 0) { 
         errno = ENOBUFS; 
-        V(sem_SM); 
+        V(SM_sem); 
         return -1; 
     }
 
@@ -224,25 +224,25 @@ ssize_t k_sendto(int k_sockfd, const void *buf, size_t len, int flags, const SPT
         if (!in_use) buff_index = i;
     }
 
-    if (buff_index == -1) { errno = ENOBUFS; V(sem_SM); return -1; }
+    if (buff_index == -1) { errno = ENOBUFS; V(SM_sem); return -1; }
 
     SM[k_sockfd].swnd.wndw[seq_no] = buff_index;
     memcpy(SM[k_sockfd].SEND_BUFFER[buff_index], buf, len);
     SM[k_sockfd].timer[seq_no] = -1;
     SM[k_sockfd].SEND_BUFFER_SIZE--;
     SM[k_sockfd].SEND_MSG_SIZES[buff_index] = len;
-    V(sem_SM);
+    V(SM_sem);
     return len;
 }
 
 ssize_t k_recvfrom(int sockfd, void *buf, size_t len, int flags, SPTR src_addr, socklen_t *addrlen) {
     access_SM(); 
-    P(sem_SM);
+    P(SM_sem);
     if (sockfd < 0 || sockfd >= N || SM[sockfd].is_free) 
     { 
         printf("[-] Invalid socket descriptor\n");
         errno = EBADF; 
-        V(sem_SM); 
+        V(SM_sem); 
         return -1; 
     }
     struct SM_entry *sm = &SM[sockfd];
@@ -261,20 +261,20 @@ ssize_t k_recvfrom(int sockfd, void *buf, size_t len, int flags, SPTR src_addr, 
         memcpy(buf, sm->RECV_BUFFER[sm->RECV_BUFFER_PTR], n);
         sm->RECV_BUFFER_PTR = (sm->RECV_BUFFER_PTR + 1) % 10;
 
-        V(sem_SM);
+        V(SM_sem);
         return n;
     }
     errno = ENOMSG; 
-    V(sem_SM);
+    V(SM_sem);
     return -1;
 }
 
 
 int k_close(int sockfd) {
     access_SM();
-    P(sem_SM);
+    P(SM_sem);
     SM[sockfd].is_free = 1;
-    V(sem_SM);
+    V(SM_sem);
     return 0;
 }
 
