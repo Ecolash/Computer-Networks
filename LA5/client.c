@@ -1,3 +1,20 @@
+/*
+=============================================================================================================
+Assignment 5 Submission
+-------------------------------------------------------------------------------------------------------------
+Name: Tuhin Mondal
+Roll number: 22CS10087
+-------------------------------------------------------------------------------------------------------------
+
+Options:
+-p <port> : Port number to connect to (default: 6655)
+-n <tasks>: Maximum number of tasks to request (default: 1000)
+
+$ gcc client.c -o client
+$ ./client -p 6655 -n 1000
+=============================================================================================================
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,6 +127,8 @@ int main(int argc, char* argv[])
             {
                 printf("[+] Received %s\n", buffer);
                 int result = calculate(buffer);
+                int T = 1 + (rand() % 10);
+                sleep(T);
                 char result_msg[BUFFER_SIZE];
                 snprintf(result_msg, BUFFER_SIZE, "RESULT %d %d", result, ERR_FLAG);
 
@@ -122,9 +141,6 @@ int main(int argc, char* argv[])
             else if (strcmp(buffer, "Already processing a task") == 0) printf("[.] Already processing a task\n");
             else printf("[-] Unexpected server message: %s\n", buffer);
         }
-
-        int T = 1 + (rand() % 10);
-        sleep(T);
     }
 
     if (task_count == max_tasks) printf("[+] Max Task Limit - exit()\n");

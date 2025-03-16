@@ -1,3 +1,20 @@
+/*
+=============================================================================================================
+Assignment 5 Submission
+-------------------------------------------------------------------------------------------------------------
+Name: Tuhin Mondal
+Roll number: 22CS10087
+-------------------------------------------------------------------------------------------------------------
+Options:
+    -p <port> : Port number to connect to (default: 6655)
+    -f <file> : File containing tasks (default: tasks.txt)
+
+$ gcc server.c -o server
+$ ./server (default)
+$ ./server -p 6655 -f tasks.txt
+=============================================================================================================
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -213,13 +230,13 @@ void handle_client(int client_fd, int ID)
         {
             if (busy == 1)
             {
-                printf("[-] Client %d disconnected while processing task: %s\n", client_fd, curr_task);
+                printf("[-] Client %d disconnected while processing task: %s\n", ID, curr_task);
                 P(queue_mtx);
                 if (TASK_Q->status[curr_index] == 1) TASK_Q->status[curr_index] = 0;
                 if (curr_index < TASK_Q->next_task) TASK_Q->next_task = curr_index;
                 V(queue_mtx);
             }
-            else printf("[+] Client %d disconnected\n", client_fd);
+            else printf("[+] Client %d disconnected\n", ID);
             break;
         }
         usleep(10000);
