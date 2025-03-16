@@ -3,8 +3,6 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -16,7 +14,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <signal.h>
-#include <getopt.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define DEFAULT_FILE    "tasks.txt"
 #define RESULTS_FILE    "results.txt"
@@ -42,7 +41,7 @@ typedef struct
 
 typedef Queue* QueuePtr;
 
-Queue *task_queue;
+QueuePtr TASK_Q;
 int queue_mtx;
 int file_mtx;
 
@@ -69,7 +68,7 @@ void V(int semid)
 void terminate(int s)
 {
     while (waitpid(-1, NULL, WNOHANG) > 0) { }
-    printf("[+] terminate(): Forked client handler terminated!\n");
+    printf("[+] terminate(): Forked client handler terminated!\n\n");
 }
 
 void SET_NONBLOCKING(int fd)
@@ -83,42 +82,53 @@ void SET_NONBLOCKING(int fd)
 int load_tasks(const char *filename)
 {
     char line[512];
-    task_queue->num_tasks = 0;
-    task_queue->next_task = 0;
+    TASK_Q->num_tasks = 0;
+    TASK_Q->next_task = 0;
     FILE *fp = fopen(filename, "r");
     if (!fp) return -1;
     
-    for (int i = 0; i < MAX_TASKS; i++) task_queue->status[i] = 0;    
+    for (int i = 0; i < MAX_TASKS; i++) TASK_Q->status[i] = 0;    
     while (fgets(line, sizeof(line), fp) != NULL)
     {
-        if (task_queue->num_tasks < MAX_TASKS)
+        if (TASK_Q->num_tasks < MAX_TASKS)
         {
-            int curr = task_queue->num_tasks;
+            int curr = TASK_Q->num_tasks;
             line[strcspn(line, "\n")] = 0;
-            strncpy(task_queue->tasks[curr], line, 512 - 1);
-            task_queue->tasks[curr][512 - 1] = '\0';
-            task_queue->num_tasks++;
+            strncpy(TASK_Q->tasks[curr], line, 512 - 1);
+
+            TASK_Q->tasks[curr][512 - 1] = '\0';
+            TASK_Q->num_tasks++;
         }
         else return -2;
     }
     fclose(fp);
-    return task_queue->num_tasks;
+    return TASK_Q->num_tasks;
+}
+
+const char* get_error_message(int err_flag)
+{
+    switch (err_flag) {
+        case 1: return "ERROR: Division by zero";
+        case 2: return "ERROR: Unknown operator";
+        case 3: return "ERROR: Incorrect format";
+        default: return "";
+    }
 }
 
 void handle_client(int client_fd, int ID)
 {
     char buffer[BUFFER_SIZE];
     char curr_task[512] = {0};
-    int busy = 0;
     int curr_index = -1;
-    int T = task_queue->num_tasks;
+    int T = TASK_Q->num_tasks;
+    int busy = 0;
 
     while (1)
     {
         P(queue_mtx);
         memset(buffer, 0, BUFFER_SIZE);
         int n = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
-        int next = task_queue->next_task;
+        int next = TASK_Q->next_task;
         V(queue_mtx);
 
         if (n > 0)
@@ -132,11 +142,13 @@ void handle_client(int client_fd, int ID)
                     int found = 0;
                     for (int i = 0; i < T; i++) 
                     {
-                        if (task_queue->status[i] != 0) continue;
+                        if (TASK_Q->status[i] != 0) continue;
+
+                        strncpy(curr_task, TASK_Q->tasks[i], 512);
+                        TASK_Q->status[i] = 1;
                         curr_index = i;
-                        strncpy(curr_task, task_queue->tasks[i], 512);
-                        task_queue->status[i] = 1;
-                        if (i == task_queue->next_task) task_queue->next_task++;
+
+                        if (i == TASK_Q->next_task) TASK_Q->next_task++;
                         found = 1;
                         break;
                     }
@@ -146,7 +158,7 @@ void handle_client(int client_fd, int ID)
                         char task_msg[BUFFER_SIZE];
                         snprintf(task_msg, BUFFER_SIZE, "Task: %s", curr_task);
                         send(client_fd, task_msg, strlen(task_msg), 0);
-                        printf("[+] Task [%d] assigned to client %d: %s\n", curr_index, ID, curr_task);
+                        printf("[+] Task [%d] > Client %d: %s\n", curr_index, ID, curr_task);
                         busy = 1;
                     }
                     else
@@ -165,23 +177,33 @@ void handle_client(int client_fd, int ID)
             }
             else if (strncmp(buffer, "RESULT", 6) == 0)
             {
-                int result;
-                sscanf(buffer, "RESULT %d", &result);
+                int result, err_flag;
+                sscanf(buffer, "RESULT %d %d", &result, &err_flag);
                 FILE *fp = fopen(RESULTS_FILE, "a");
                 
                 P(file_mtx);
                 if (fp == NULL) perror("[-] Failed to open results file");
-                fprintf(fp, "%s = %d\n", curr_task, result);
+                
+                if (err_flag == 0) 
+                {
+                    fprintf(fp, "%-10s = %-3d\n", curr_task, result);
+                    printf("[+] Task [%d] < Client %d: %d\n", curr_index, ID, result);
+                } else 
+                {
+                    const char* error_msg = get_error_message(err_flag);
+                    fprintf(fp, "%-10s = NaN \t\t %30s\n", curr_task, error_msg);
+                    printf("[-] Task [%d] < Client %d: %s\n", curr_index, ID, error_msg);
+                }
+                
                 fclose(fp);
                 V(file_mtx);
 
                 P(queue_mtx);
-                task_queue->status[curr_index] = 2;
+                TASK_Q->status[curr_index] = 2;
                 V(queue_mtx);
-                printf("[+] Result from client %d: %d\n", ID, result);
                 busy = 0;
             }
-            else if (strcmp(buffer, "exit") == 0)
+            else if (strcmp(buffer, "EXIT") == 0)
             {
                 printf("[+] Client %d exiting...\n", ID);
                 break;
@@ -193,8 +215,8 @@ void handle_client(int client_fd, int ID)
             {
                 printf("[-] Client %d disconnected while processing task: %s\n", client_fd, curr_task);
                 P(queue_mtx);
-                if (task_queue->status[curr_index] == 1) task_queue->status[curr_index] = 0;
-                if (curr_index < task_queue->next_task) task_queue->next_task = curr_index;
+                if (TASK_Q->status[curr_index] == 1) TASK_Q->status[curr_index] = 0;
+                if (curr_index < TASK_Q->next_task) TASK_Q->next_task = curr_index;
                 V(queue_mtx);
             }
             else printf("[+] Client %d disconnected\n", client_fd);
@@ -210,9 +232,9 @@ bool completed()
 {
     bool finished = true;
     P(queue_mtx);
-    for (int i = 0; i < task_queue->num_tasks; i++)
+    for (int i = 0; i < TASK_Q->num_tasks; i++)
     {
-        if (task_queue->status[i] != 2)
+        if (TASK_Q->status[i] != 2)
         {
             finished = false;
             break;
@@ -245,18 +267,19 @@ int main(int argc, char *argv[])
     int shmid  = shmget(IPC_PRIVATE, sizeof(Queue), IPC_CREAT | 0666);
     if (shmid == -1) ERROR("Shared memory allocation failed");
 
-    task_queue = (Queue *)shmat(shmid, NULL, 0);
-    if (task_queue == (void *)-1) ERROR("Shared memory attachment failed");
+    TASK_Q = (QueuePtr)shmat(shmid, NULL, 0);
+    if (TASK_Q == (void *)-1) ERROR("Shared memory attachment failed");
 
     int T = load_tasks(tasks);
     switch (T) {
         case -1: ERROR("Unable to read task file");
         case -2: ERROR("More than 1000 tasks");
-        default: printf("[+] %d tasks loaded successfully!\n", task_queue->num_tasks);
+        default: printf("[+] %d tasks loaded successfully!\n", TASK_Q->num_tasks);
     }
 
     queue_mtx = semget(IPC_PRIVATE, 1, IPC_CREAT | 0666);
     file_mtx = semget(IPC_PRIVATE, 1, IPC_CREAT | 0666);
+    
     if (queue_mtx == -1) ERROR("Failed to create queue semaphore");
     if (file_mtx == -1) ERROR("Failed to create file semaphore");
     semctl(queue_mtx, 0, SETVAL, 1);
@@ -295,6 +318,10 @@ int main(int argc, char *argv[])
     }
   
     int client_cnt = 0;
+    FILE *fp2 = fopen(RESULTS_FILE, "w");
+    fprintf(fp2, "\n--------- Task results ---------\n\n");
+    fclose(fp2);
+
     while (1)
     {
         if (completed()) break;
@@ -304,7 +331,7 @@ int main(int argc, char *argv[])
         if (client_fd == -1) continue;
         
         client_cnt++;
-        printf("[+] New connection from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        printf("[+] New connection from %s:%d\n\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
         SET_NONBLOCKING(client_fd);
         pid_t pid = fork();
         switch (pid)
@@ -317,7 +344,8 @@ int main(int argc, char *argv[])
     }
     
     for(int i = 0; i < client_cnt; i++) wait(NULL);
-    printf("[+] All tasks completed. Shutting down server...\n");
 
+    sleep(5); 
+    printf("[+] All tasks completed. Shutting down server...\n");
     return 0;
 }

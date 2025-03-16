@@ -58,8 +58,16 @@ int calculate(const char *task)
     return ans;
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    int port = PORT;
+    int max_tasks = 1000;
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-p") == 0) if (i + 1 < argc) port = atoi(argv[++i]);
+        if (strcmp(argv[i], "-n") == 0) if (i + 1 < argc) max_tasks = atoi(argv[++i]);
+    }
+
     int sockfd;
     struct sockaddr_in server_addr;
     char buffer[BUFFER_SIZE];
@@ -74,15 +82,16 @@ int main()
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons(port);
 
     int connected = connect(sockfd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
     switch (connected) {
         case -1: ERROR("[-] Error in connection.\n");
-        default: printf("[+] Connected to server at %s:%d\n", SERVER_IP, PORT); 
+        default: printf("[+] Connected to server at %s:%d\n\n", SERVER_IP, port); 
     }
 
-    while (1)
+    int task_count = 0;
+    while (task_count < max_tasks)
     {
         if (!waiting)
         {
@@ -102,10 +111,11 @@ int main()
                 printf("[+] Received %s\n", buffer);
                 int result = calculate(buffer);
                 char result_msg[BUFFER_SIZE];
-                snprintf(result_msg, BUFFER_SIZE, "RESULT %d", result);
+                snprintf(result_msg, BUFFER_SIZE, "RESULT %d %d", result, ERR_FLAG);
 
                 send(sockfd, result_msg, strlen(result_msg), 0);
-                printf("[+] Sent result: %d\n", result);
+                printf("[+] Sent result: %d (ERR_FLAG: %d)\n\n", result, ERR_FLAG);
+                task_count++;
                 waiting = 0;
             }
             else if (strcmp(buffer, "No tasks available") == 0) break;
@@ -113,14 +123,17 @@ int main()
             else printf("[-] Unexpected server message: %s\n", buffer);
         }
 
-        int T = 5 + (rand() % 5);
+        int T = 1 + (rand() % 10);
         sleep(T);
     }
 
-    printf("[+] Sending exit message\n");
-    char *exit_msg = "exit";
+    if (task_count == max_tasks) printf("[+] Max Task Limit - exit()\n");
+    else printf("[+] No Task Available - exit()\n");
+    
+    char exit_msg[5] = "EXIT";
     send(sockfd, exit_msg, strlen(exit_msg), 0);
     close(sockfd);
+
     printf("[+] Connection closed\n");
-    return 0;
+    exit(EXIT_SUCCESS);
 }
