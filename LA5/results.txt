@@ -2,23 +2,10 @@
 --------- Task results ---------
 
 10  +  5   = 15 
+10  +      = NaN 		        ERROR: Incorrect format
 100 +  99  = 199
--20 + -40  = -60
 -20 - -40  = 20 
-80  / -40  = -2 
 -80 / -40  = 2  
+-20 + -40  = -60
+80  / -40  = -2 
 25  -  12  = 13 
-8   *  7   = 56 
-56  /  8   = 7  
-100 /  0   = NaN 		        ERROR: Division by zero
-42  %  5   = 2  
-64  %  0   = NaN 		        ERROR: Division by zero
-144 -  89  = 55 
-72  *  3   = 216
-99  /  11  = 9  
-128 %  7   = 2  
-36  %  0   = NaN 		        ERROR: Division by zero
-88  &  29  = 24 
-19  ?  4   = NaN 		        ERROR: Unknown operator
-45  |  67  = 111
-47  +      = NaN 		        ERROR: Incorrect format

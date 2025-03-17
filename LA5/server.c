@@ -33,6 +33,7 @@ $ ./server -p 6655 -f tasks.txt
 #include <signal.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 
 #define DEFAULT_FILE    "tasks.txt"
 #define RESULTS_FILE    "results.txt"
@@ -139,6 +140,7 @@ void handle_client(int client_fd, int ID)
     int curr_index = -1;
     int T = TASK_Q->num_tasks;
     int busy = 0;
+    time_t last = time(NULL);
 
     while (1)
     {
@@ -147,6 +149,12 @@ void handle_client(int client_fd, int ID)
         int n = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
         int next = TASK_Q->next_task;
         V(queue_mtx);
+
+        if (time(NULL) - last > 30)
+        {
+            printf("[-] timeout() - Client %d timed out\n", ID);
+            break;
+        }
 
         if (n > 0)
         {
@@ -166,6 +174,7 @@ void handle_client(int client_fd, int ID)
                         curr_index = i;
 
                         if (i == TASK_Q->next_task) TASK_Q->next_task++;
+                        last = time(NULL);
                         found = 1;
                         break;
                     }

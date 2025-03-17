@@ -9,9 +9,10 @@ Roll number: 22CS10087
 Options:
 -p <port> : Port number to connect to (default: 6655)
 -n <tasks>: Maximum number of tasks to request (default: 1000)
+-P <prob> : Probability of misbehaviours (default: 0.1)
 
 $ gcc client.c -o client
-$ ./client -p 6655 -n 1000
+$ ./client -p 6655 -n 1000 -P 0.1
 =============================================================================================================
 */
 
@@ -21,6 +22,7 @@ $ ./client -p 6655 -n 1000
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -45,6 +47,12 @@ void ERROR(const char *msg)
     snprintf(buf, sizeof(buf), "[-] %s", msg);
     perror(buf);
     exit(EXIT_FAILURE);
+}
+
+int prob(float p)
+{
+    srand(time(NULL) ^ getpid());
+    return ((float)rand() / RAND_MAX) < p;
 }
 
 int calculate(const char *task)
@@ -77,12 +85,14 @@ int calculate(const char *task)
 
 int main(int argc, char* argv[])
 {
+    float P = 0.1;
     int port = PORT;
     int max_tasks = 1000;
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-p") == 0) if (i + 1 < argc) port = atoi(argv[++i]);
         if (strcmp(argv[i], "-n") == 0) if (i + 1 < argc) max_tasks = atoi(argv[++i]);
+        if (strcmp(argv[i], "-P") == 0) if (i + 1 < argc) P = atof(argv[++i]);
     }
 
     int sockfd;
@@ -107,6 +117,12 @@ int main(int argc, char* argv[])
         default: printf("[+] Connected to server at %s:%d\n\n", SERVER_IP, port); 
     }
 
+    if (prob(P)) {
+        printf("[-] Client exiting without sending any request\n");
+        close(sockfd);
+        exit(EXIT_SUCCESS);
+    }
+
     int task_count = 0;
     while (task_count < max_tasks)
     {
@@ -118,6 +134,11 @@ int main(int argc, char* argv[])
             waiting = 1;
         }
 
+        if (prob(P)) {
+            char *msg = "GET_TASK";
+            send(sockfd, msg, strlen(msg), 0);
+        }
+
         memset(buffer, 0, BUFFER_SIZE);
         int n = recv(sockfd, buffer, BUFFER_SIZE - 1, 0);
         if (n > 0)
@@ -126,8 +147,19 @@ int main(int argc, char* argv[])
             if (strncmp(buffer, "Task:", 5) == 0)
             {
                 printf("[+] Received %s\n", buffer);
-                int result = calculate(buffer);
+                if (prob(P))
+                {
+                    printf("[-] Client exiting without processing a task\n");
+                    close(sockfd);
+                    exit(EXIT_SUCCESS);
+                }
+                if (prob(P))
+                {
+                    printf("[-] Client not processing a task after receiving it\n");
+                    while(1) sleep(1);
+                }
                 int T = 1 + (rand() % 10);
+                int result = calculate(buffer);
                 sleep(T);
                 char result_msg[BUFFER_SIZE];
                 snprintf(result_msg, BUFFER_SIZE, "RESULT %d %d", result, ERR_FLAG);
@@ -138,7 +170,7 @@ int main(int argc, char* argv[])
                 waiting = 0;
             }
             else if (strcmp(buffer, "No tasks available") == 0) break;
-            else if (strcmp(buffer, "Already processing a task") == 0) printf("[.] Already processing a task\n");
+            else if (strncmp(buffer, "Already processing a task", 26) == 0) printf("[*] Server : Already assigned task!\n");
             else printf("[-] Unexpected server message: %s\n", buffer);
         }
     }
