@@ -152,7 +152,7 @@ void handle_client(int client_fd, int ID)
 
         if (time(NULL) - last > 30)
         {
-            printf("[-] timeout() - Client %d timed out\n", ID);
+            printf("\n[-] timeout() - Client %d timed out\n", ID);
             break;
         }
 
@@ -165,7 +165,8 @@ void handle_client(int client_fd, int ID)
                 {
                     P(queue_mtx);
                     int found = 0;
-                    for (int i = 0; i < T; i++) 
+                    int i = TASK_Q->next_task;
+                    for (; i < T; i++) 
                     {
                         if (TASK_Q->status[i] != 0) continue;
 
@@ -184,21 +185,20 @@ void handle_client(int client_fd, int ID)
                         char task_msg[BUFFER_SIZE];
                         snprintf(task_msg, BUFFER_SIZE, "Task: %s", curr_task);
                         send(client_fd, task_msg, strlen(task_msg), 0);
-                        printf("[+] Task [%d] > Client %d: %s\n", curr_index, ID, curr_task);
+                        printf("  [+] Task [%d] > Client %d: %s\n", curr_index + 1, ID, curr_task);
                         busy = 1;
                     }
                     else
                     {
                         char *msg = "No tasks available";
                         send(client_fd, msg, strlen(msg), 0);
-                        printf("[+] No tasks available for client %d\n", ID);
+                        printf("\n[+] No tasks available for client %d\n", ID);
                     }
                 }
                 else
                 {
                     char *msg = "Already processing a task";
-                    send(client_fd, msg, strlen(msg), 0);
-                    printf("[+] Client %d already has a task\n", ID);
+                    printf("  [+] Client %d already has a task\n", ID);
                 }
             }
             else if (strncmp(buffer, "RESULT", 6) == 0)
@@ -213,12 +213,12 @@ void handle_client(int client_fd, int ID)
                 if (err_flag == 0) 
                 {
                     fprintf(fp, "%-10s = %-3d\n", curr_task, result);
-                    printf("[+] Task [%d] < Client %d: %d\n", curr_index, ID, result);
+                    printf("  [+] Task [%d] < Client %d: %d\n", curr_index + 1, ID, result);
                 } else 
                 {
                     const char* error_msg = get_error_message(err_flag);
-                    fprintf(fp, "%-10s = NaN \t\t %30s\n", curr_task, error_msg);
-                    printf("[-] Task [%d] < Client %d: %s\n", curr_index, ID, error_msg);
+                    fprintf(fp, "%-10s = NaN      %30s\n", curr_task, error_msg);
+                    printf("  [-] Task [%d] < Client %d: %s\n", curr_index + 1, ID, error_msg);
                 }
                 
                 fclose(fp);
@@ -239,13 +239,13 @@ void handle_client(int client_fd, int ID)
         {
             if (busy == 1)
             {
-                printf("[-] Client %d disconnected while processing task: %s\n", ID, curr_task);
+                printf("\n[-] Client %d disconnected while processing task: %s\n", ID, curr_task);
                 P(queue_mtx);
                 if (TASK_Q->status[curr_index] == 1) TASK_Q->status[curr_index] = 0;
                 if (curr_index < TASK_Q->next_task) TASK_Q->next_task = curr_index;
                 V(queue_mtx);
             }
-            else printf("[+] Client %d disconnected\n", ID);
+            else printf("\n[+] Client %d disconnected\n", ID);
             break;
         }
         usleep(10000);
@@ -357,7 +357,7 @@ int main(int argc, char *argv[])
         if (client_fd == -1) continue;
         
         client_cnt++;
-        printf("[+] New connection from %s:%d\n\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        printf("\n  [+] New connection from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
         SET_NONBLOCKING(client_fd);
         pid_t pid = fork();
         switch (pid)
@@ -371,7 +371,8 @@ int main(int argc, char *argv[])
     
     for(int i = 0; i < client_cnt; i++) wait(NULL);
 
-    sleep(5); 
+    sleep(1); 
     printf("[+] All tasks completed. Shutting down server...\n");
+    printf("[+] See results.txt for updated task results\n");
     return 0;
 }

@@ -1,6 +1,6 @@
 /*
 =============================================================================================================
-Assignment 5 Submission
+Assignment 5 Submission (Non Blocking Client Version)
 -------------------------------------------------------------------------------------------------------------
 Name: Tuhin Mondal
 Roll number: 22CS10087
@@ -9,7 +9,7 @@ Roll number: 22CS10087
 Options:
 -p <port> : Port number to connect to (default: 6655)
 -n <tasks>: Maximum number of tasks to request (default: 1000)
--P <prob> : Probability of misbehaviours (default: 0.1)
+-P <prob> : Probability of misbehaviours (default: 0)
 
 $ gcc client.c -o client
 $ ./client -p 6655 -n 1000 -P 0.1
@@ -85,7 +85,7 @@ int calculate(const char *task)
 
 int main(int argc, char* argv[])
 {
-    float P = 0.1;
+    float P = 0.0;
     int port = PORT;
     int max_tasks = 1000;
     for (int i = 1; i < argc; i++)
@@ -114,8 +114,13 @@ int main(int argc, char* argv[])
     int connected = connect(sockfd, (struct sockaddr *)&server_addr, sizeof(struct sockaddr));
     switch (connected) {
         case -1: ERROR("[-] Error in connection.\n");
-        default: printf("[+] Connected to server at %s:%d\n\n", SERVER_IP, port); 
+        default: printf("[+] Connected to server at %s:%d\n", SERVER_IP, port); 
     }
+
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    if (flags == -1) ERROR("Failed to get socket flags");
+    if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1) ERROR("Failed to set non-blocking mode");
+    printf("[+] Socket is set to non-blocking mode\n\n");
 
     if (prob(P)) {
         printf("[-] Client exiting without sending any request\n");
@@ -129,20 +134,37 @@ int main(int argc, char* argv[])
         if (!waiting)
         {
             char *msg = "GET_TASK";
-            send(sockfd, msg, strlen(msg), 0);
-            printf("[+] Task request sent\n");
+            if(send(sockfd, msg, strlen(msg), 0) < 0) if(errno != EAGAIN && errno != EWOULDBLOCK) ERROR("Send failed");
+            printf("[+] Request Sent: GET_TASK\n");
             waiting = 1;
         }
 
-        if (prob(P)) {
+        while (prob(P)) {
+            sleep(1);
             char *msg = "GET_TASK";
-            send(sockfd, msg, strlen(msg), 0);
+            if(send(sockfd, msg, strlen(msg), 0) < 0) if(errno != EAGAIN && errno != EWOULDBLOCK) ERROR("Send failed");
+            printf("[+] Request Sent: GET_TASK\n");
+
         }
 
         memset(buffer, 0, BUFFER_SIZE);
         int n = recv(sockfd, buffer, BUFFER_SIZE - 1, 0);
-        if (n > 0)
+        if(n < 0){
+            if(errno == EAGAIN || errno == EWOULDBLOCK){
+                usleep(100000);
+                continue;
+            }
+            else {
+                ERROR("Receive failed");
+            }
+        }
+        else if(n == 0){
+            printf("[-] Server closed the connection\n");
+            break;
+        }
+        else 
         {
+            buffer[n] = '\0';
             buffer[strcspn(buffer, "\n")] = 0;
             if (strncmp(buffer, "Task:", 5) == 0)
             {
@@ -158,28 +180,31 @@ int main(int argc, char* argv[])
                     printf("[-] Client not processing a task after receiving it\n");
                     while(1) sleep(1);
                 }
-                int T = 1 + (rand() % 10);
-                int result = calculate(buffer);
+                int T = 1 + (rand() % 5);
                 sleep(T);
+                int result = calculate(buffer);
                 char result_msg[BUFFER_SIZE];
                 snprintf(result_msg, BUFFER_SIZE, "RESULT %d %d", result, ERR_FLAG);
-
-                send(sockfd, result_msg, strlen(result_msg), 0);
-                printf("[+] Sent result: %d (ERR_FLAG: %d)\n\n", result, ERR_FLAG);
+                
+                if(send(sockfd, result_msg, strlen(result_msg), 0) < 0) {
+                    if(errno != EAGAIN && errno != EWOULDBLOCK)
+                        ERROR("Send failed");
+                } else {
+                    printf("[+] Sent result: %d (ERR_FLAG: %d)\n\n", result, ERR_FLAG);
+                }
                 task_count++;
                 waiting = 0;
             }
             else if (strcmp(buffer, "No tasks available") == 0) break;
-            else if (strncmp(buffer, "Already processing a task", 26) == 0) printf("[*] Server : Already assigned task!\n");
             else printf("[-] Unexpected server message: %s\n", buffer);
         }
     }
 
-    if (task_count == max_tasks) printf("[+] Max Task Limit - exit()\n");
-    else printf("[+] No Task Available - exit()\n");
+    if (task_count == max_tasks)  printf("[+] Max Task Limit - exit()\n");
+    else  printf("[+] No Task Available - exit()\n");
     
     char exit_msg[5] = "EXIT";
-    send(sockfd, exit_msg, strlen(exit_msg), 0);
+    if(send(sockfd, exit_msg, strlen(exit_msg), 0) < 0)  if(errno != EAGAIN && errno != EWOULDBLOCK) ERROR("Send failed");
     close(sockfd);
 
     printf("[+] Connection closed\n");
