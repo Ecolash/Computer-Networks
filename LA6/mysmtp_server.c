@@ -12,27 +12,30 @@ $ gcc mysmtp_server.c -o mysmtp_server
 $ ./mysmtp_server 2525
 =============================================================================================================
 */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
+#include <errno.h>
+#include <time.h>
+
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <time.h>
-#include <sys/stat.h>
-#include <errno.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <netinet/in.h>
-#include <signal.h>
+#include <sys/stat.h>
 
 #define PORT 2525
 #define BUFFER_SIZE 1024
 
 #define GREEN "\033[0;32m"
 #define RESET "\033[0m"
-#define BOLD "\033[1m"
+#define BOLD  "\033[1m"
+#define CYAN  "\033[0;36m"
+#define RED   "\033[0;31m"
+#define YELLOW "\033[0;33m"
 
 char *date() {
     time_t now = time(NULL);
@@ -42,12 +45,12 @@ char *date() {
     return date_str;
 }
 
-
-const char success[]   = "200 OK\n";
-const char forbidden[] = "403 FORBIDDEN Action not permitted\n";
-const char not_found[] = "401 NOT FOUND\n";
-const char serv_err[]  = "500 SERVER ERROR\n";
-const char invalid[]   = "400 ERR Invalid command syntax\n";
+const char success[]   = GREEN BOLD "200 OK" RESET "\n";
+const char nested[]    = YELLOW BOLD "403 FORBIDDEN " RESET YELLOW "Nested command not allowed" RESET "\n";
+const char forbidden[] = YELLOW BOLD "403 FORBIDDEN " RESET YELLOW "Action not permitted" RESET "\n";
+const char invalid[]   = YELLOW BOLD "400 ERR" RESET YELLOW " Invalid command syntax" RESET "\n";
+const char not_found[] = RED BOLD "401 NOT FOUND" RESET "\n";
+const char serv_err[]  = RED BOLD "500 SERVER ERROR" RESET "\n";
 
 void handle_helo(int client_fd, const char *buffer) {
     char client_id[BUFFER_SIZE];
@@ -96,8 +99,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
     int client_fd = fd;
     char *client_ip = inet_ntoa(client_addr.sin_addr);
     int client_port = ntohs(client_addr.sin_port);
-
-    printf("Client connected from %s:%d\n", client_ip, client_port);
+    printf("Client connected from %s:%d\n\n", client_ip, client_port);
 
     char buffer[BUFFER_SIZE];
     char sender[256];
@@ -125,7 +127,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
         {
             switch (state) {
                 case 1:  handle_mail_from(client_fd, buffer, sender); state = 2; break;
-                case 2:  send(client_fd, forbidden, strlen(forbidden), 0); printf("Error: Nested MAIL FROM received\n"); break;
+                case 2:  send(client_fd, nested, strlen(nested), 0); printf("Error: Nested MAIL FROM received\n"); break;
                 default: send(client_fd, forbidden, strlen(forbidden), 0); printf("Error: MAIL FROM received out of sequence\n");
             }
         }
@@ -136,7 +138,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
             {
                 case 1:  send(client_fd, forbidden, strlen(forbidden), 0); printf("Error: RCPT TO received before MAIL FROM\n"); break;
                 case 2:  handle_rcpt_to(client_fd, buffer, recipient); state = 3; break;
-                case 3:  send(client_fd, forbidden, strlen(forbidden), 0); printf("Error: Nested RCPT TO received\n"); break;
+                case 3:  send(client_fd, nested, strlen(nested), 0); printf("Error: Nested RCPT TO received\n"); break;
                 default: send(client_fd, forbidden, strlen(forbidden), 0); printf("Error: RCPT TO received out of sequence\n"); break;
             }
         }
@@ -147,7 +149,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                 char message[4096];
                 bzero(message, sizeof(message));
                 send(client_fd, success, strlen(success), 0);
-                printf("DATA received\n");
+                printf("DATA\n");
 
                 while (1)
                 {
@@ -196,7 +198,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                         fprintf(fp, "From: %s\n", sender);
                         fprintf(fp, "To: %s\n", recipient);
                         fprintf(fp, "Date: %s\n", date());
-                        fprintf(fp, "Message:\n\n%s\n", message);
+                        fprintf(fp, "\n%s\n", message);
                         fprintf(fp, "---------------------------------END---------------------------------\n");
                         fclose(fp);
 
@@ -249,7 +251,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                 bzero(response, sizeof(response));
                 bzero(line, sizeof(line));
 
-                strcpy(response, "200 OK\n");
+                strcpy(response, success);
                 while (fgets(line, sizeof(line), fp)) 
                 {
                     line[strcspn(line, "\r\n")] = '\0';
@@ -274,13 +276,13 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                         }
                         
                         char entry[512];
-                        snprintf(entry, sizeof(entry), "%s%sID: %d%s - From: %-30s [%s]\n", GREEN, BOLD, current_id, RESET, sender_email, date_str);
+                        snprintf(entry, sizeof(entry), "%s%s%2d:%s Email from " CYAN "%-25s" RESET "[%s]\n", GREEN, BOLD, current_id, RESET, sender_email, date_str);
                         strcat(response, entry);
                     }
                 }
                 fclose(fp);
                 send(client_fd, response, strlen(response), 0);
-                printf("LIST %s\nEmails retrieved; list sent.\n", email);
+                printf("LIST %s\nEmails retrieved: List sent.\n", email);
             }
         }
         else if (strncmp(buffer, "GET_MAIL ", 9) == 0)
@@ -316,14 +318,15 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                         
                         if (current_id == mail_id) {
                             found = 1;
-                            strcat(email_content, "200 OK\n");
+                            strcat(email_content, success);
+                            strcat(email_content, "\n" CYAN);
                             strcat(email_content, line);
                             strcat(email_content, "\n");
                             while (fgets(line, sizeof(line), fp)) {
+                                if (strstr(line, "---------------------------------END---------------------------------")) break;
                                 line[strcspn(line, "\r\n")] = '\0';
                                 strcat(email_content, line);
                                 strcat(email_content, "\n");
-                                if (strstr(line, "---------------------------------END---------------------------------")) break;
                             }
                             break;
                         } else 
@@ -338,6 +341,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                 
                 fclose(fp);
                 if (found) {
+                    strcat(email_content, RESET);
                     send(client_fd, email_content, strlen(email_content), 0);
                     printf("GET_MAIL %s %d: Email sent.\n", email, mail_id);
                 } else {
@@ -348,7 +352,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
         }
         else if (strcmp(buffer, "QUIT") == 0)
         {
-            send(client_fd, "200 Goodbye\n", strlen("200 Goodbye\n"), 0);
+            send(client_fd, "\033[0;32m200 Goodbye\033[0m\n", strlen("\033[0;32m200 Goodbye\033[0m\n"), 0);
             printf("Client disconnected.\n");
             break;
         }

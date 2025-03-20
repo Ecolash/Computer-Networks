@@ -25,7 +25,8 @@ $ ./mysmtp_client -IP 192.168.1.100 -port 2525
 
 #define BUFFER_SIZE 1024
 
-#define BOLD "\033[1m"
+#define GREEN "\033[0;32m"
+#define BOLD  "\033[1m"
 #define RESET "\033[0m"
 
 int main(int argc, char *argv[]) {
@@ -59,14 +60,15 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
-    printf("Successfully connected to the server (%s:%d)\n", server_ip, port);
+    printf("\033[2J\033[H");
+    printf("Successfully connected to the server " GREEN BOLD "%s : %d" RESET"\n", server_ip, port);
     char command_buffer[BUFFER_SIZE];
     char response_buffer[BUFFER_SIZE];
     int n;
 
     while (1)
     {
-        printf("%s> ", BOLD);
+        printf("\n%s> ", BOLD);
         fflush(stdout); 
 
         n = read(STDIN_FILENO, command_buffer, BUFFER_SIZE - 1);
@@ -114,8 +116,10 @@ int main(int argc, char *argv[]) {
         if (n < 0) exit(EXIT_FAILURE);
         response_buffer[n] = '\0';
         printf("%s", response_buffer);
-        
-        if (strncmp(response_buffer, "200 Goodbye", 11) == 0) break;
+        response_buffer[strcspn(response_buffer, "\r\n")] = '\0';
+
+        if (strncmp(response_buffer, "\033[0;32m200 Goodbye\033[0m", 23) == 0)
+            break;
     }
     close(socket_fd);
     return 0;
