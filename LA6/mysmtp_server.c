@@ -131,7 +131,6 @@ void handle_client(int fd, struct sockaddr_in client_addr)
                 default: send(client_fd, forbidden, strlen(forbidden), 0); printf("Error: MAIL FROM received out of sequence\n");
             }
         }
-
         else if (strncmp(buffer, "RCPT TO:", 8) == 0)
         {
             switch (state)
@@ -144,7 +143,7 @@ void handle_client(int fd, struct sockaddr_in client_addr)
         }
         else if (strcmp(buffer, "DATA") == 0)
         {
-            if (state >= 3)
+            if (state == 3)
             {
                 char message[4096];
                 bzero(message, sizeof(message));

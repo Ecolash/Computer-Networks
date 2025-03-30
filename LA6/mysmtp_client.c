@@ -25,9 +25,18 @@ $ ./mysmtp_client -IP 192.168.1.100 -port 2525
 
 #define BUFFER_SIZE 1024
 
+#define RED   "\033[0;31m"
+#define YELLOW "\033[0;33m"
 #define GREEN "\033[0;32m"
 #define BOLD  "\033[1m"
 #define RESET "\033[0m"
+
+const char success[]   = GREEN BOLD "200 OK" RESET "\n";
+const char nested[]    = YELLOW BOLD "403 FORBIDDEN " RESET YELLOW "Nested command not allowed" RESET "\n";
+const char forbidden[] = YELLOW BOLD "403 FORBIDDEN " RESET YELLOW "Action not permitted" RESET "\n";
+const char invalid[]   = YELLOW BOLD "400 ERR" RESET YELLOW " Invalid command syntax" RESET "\n";
+const char not_found[] = RED BOLD "401 NOT FOUND" RESET "\n";
+const char serv_err[]  = RED BOLD "500 SERVER ERROR" RESET "\n";
 
 int main(int argc, char *argv[]) {
 
@@ -88,7 +97,7 @@ int main(int argc, char *argv[]) {
             response_buffer[n] = '\0';
             printf("%s", response_buffer);
             
-            if (strncmp(response_buffer, "403 FORBIDDEN Action not permitted\n", 36) == 0) continue;
+            if (strncmp(response_buffer, forbidden, strlen(forbidden)) == 0) continue;
             
             printf("Enter your message (end with a single dot '.'): \n");
 
