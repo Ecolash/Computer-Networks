@@ -1,228 +1,360 @@
-/* cldp_server.c
- * Assignment 7 Submission
- * Name: <Your_Name>
- * Roll number: <Your_Roll_Number>
- *
- * This program implements the Custom Lightweight Discovery Protocol (CLDP) server.
- * It performs two functions:
- *  1. Every 10 seconds, it broadcasts a HELLO message to announce its presence.
- *  2. It listens for QUERY messages and responds with a RESPONSE containing its
- *     hostname and current timestamp.
- *
- * Usage: sudo ./cldp_server <interface_name> <server_ip>
- *   - <interface_name>: The network interface to bind to (e.g., wlp0s20f3)
- *   - <server_ip>: The IP address of that interface
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netinet/ip.h>
 #include <sys/socket.h>
-#include <sys/types.h>
-#include <net/if.h>
+#include <arpa/inet.h>
+#include <linux/ip.h>
+#include <unistd.h>
+#include <signal.h>
 #include <time.h>
-#include <sys/time.h>
-#include <errno.h>
 #include <pthread.h>
 
-#define CLDP_PROTOCOL 253
-#define HELLO    0x01
-#define QUERY    0x02
-#define RESPONSE 0x03
+#include <sys/sysinfo.h>   // For struct sysinfo
+#include <sys/ioctl.h>     // For ioctl
+#include <net/if.h>        // For struct ifreq, struct ifconf, SIOCGIFCONF, SIOCGIFFLAGS
+#include <errno.h>         // For errno
 
-#pragma pack(push, 1)
-typedef struct {
-    uint8_t msg_type;       // Message type (HELLO, QUERY, RESPONSE)
-    uint8_t payload_len;    // Length of payload (if any)
-    uint16_t transaction_id;// Transaction ID for matching queries/responses
-    uint32_t reserved;      // Reserved field (set to 0)
-} cldp_header_t;
+#define CLDP_PROTO 253
+#define BUFFER_SIZE 1024
+
+
+#define CLDP_HELLO 0x01
+#define CLDP_QUERY 0x02
+#define CLDP_RESPONSE 0x03
+
+
+#define HOSTNAME 0x10
+#define CPU_LOAD 0x11
+#define SYSTEM_TIME 0x12
+#define NETWORK_STATUS 0x13
+#define MEMORY_USAGE 0x14
+
+#pragma pack(push,1)
+struct cldp_header {
+    uint8_t type;
+    uint8_t length;
+    uint16_t transaction_id;
+    uint32_t reserved;
+};
 #pragma pack(pop)
 
-#define BUF_SIZE 1024
-
-// Global variables (set from command-line arguments)
 int sockfd;
-char iface[32];
-char server_ip[32];
+struct sockaddr_in broadcast_addr;
 
-//
-// send_hello_thread: broadcasts HELLO messages every 10 seconds
-//
-void *send_hello_thread(void *arg) {
-    struct sockaddr_in bcast_addr;
-    memset(&bcast_addr, 0, sizeof(bcast_addr));
-    bcast_addr.sin_family = AF_INET;
-    // Use the broadcast address
-    bcast_addr.sin_addr.s_addr = inet_addr("255.255.255.255");
+void handle_sigint(int sig) {
+    printf("\nClosing socket and exiting...\n");
+    close(sockfd);
+    exit(0);
+}
 
-    // Enable broadcast on the socket.
-    int broadcastEnable = 1;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, sizeof(broadcastEnable)) < 0) {
-        perror("setsockopt (SO_BROADCAST)");
-        pthread_exit(NULL);
+char* get_memory_usage() {
+    static char buffer[256];
+    struct sysinfo info;
+    
+    if (sysinfo(&info) != 0) {
+        snprintf(buffer, sizeof(buffer), "Error retrieving memory info: %s", strerror(errno));
+        return buffer;
+    }
+    double total_mem = info.totalram * info.mem_unit / (1024.0 * 1024.0);  // In MB
+    double free_mem = info.freeram * info.mem_unit / (1024.0 * 1024.0);    // In MB
+    double used_mem = total_mem - free_mem;
+    double usage_percent = (used_mem / total_mem) * 100.0;
+    
+    snprintf(buffer, sizeof(buffer), "Memory usage: %.2f MB / %.2f MB (%.2f%%)",
+             used_mem, total_mem, usage_percent);
+    return buffer;
+}
+
+char* get_cpu_load() {
+    static char load_str[50];
+    double load;
+    if (getloadavg(&load, 1) == -1) {
+        strcpy(load_str, "N/A");
+    } else {
+        snprintf(load_str, sizeof(load_str), "CPU Load: %.2f", load);
+    }
+    return load_str;
+}
+
+char* get_system_time() {
+    static char time_str[50];
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+    snprintf(time_str, sizeof(time_str), "System Time: %02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return time_str;
+}
+
+char* get_host_name(){
+    static char host_name[100];
+    char host[51];
+    gethostname(host, 50);
+    snprintf(host_name, sizeof(host_name), "Hostname: %s",host);
+    return host_name;
+}
+
+char* get_network_status() {
+    static char buffer[512];  // Static buffer persists across function calls
+    struct ifreq ifr;
+    struct ifconf ifc;
+    char buf[1024];
+    int success = 0;
+
+    // Clear the buffer before use
+    memset(buffer, 0, sizeof(buffer));
+    snprintf(buffer, sizeof(buffer), "Network interfaces: ");
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock == -1) {
+        return "Error creating socket for network interface check";
     }
 
-    uint16_t transaction_id = 0;
-    while (1) {
-        char send_buffer[BUF_SIZE];
-        memset(send_buffer, 0, BUF_SIZE);
+    ifc.ifc_len = sizeof(buf);
+    ifc.ifc_buf = buf;
+    if (ioctl(sock, SIOCGIFCONF, &ifc) == -1) {
+        close(sock);
+        return "Error getting network interfaces";
+    }
 
-        // Build IP header manually.
-        struct ip *ip_hdr = (struct ip *)send_buffer;
-        int ip_hdr_len = sizeof(struct ip);
-        ip_hdr->ip_hl = ip_hdr_len / 4;
-        ip_hdr->ip_v = 4;
-        ip_hdr->ip_tos = 0;
-        // No payload for HELLO: total length = IP header + CLDP header.
-        int payload_len = 0;
-        int total_len = ip_hdr_len + sizeof(cldp_header_t) + payload_len;
-        ip_hdr->ip_len = htons(total_len);
-        ip_hdr->ip_id = htons(0);
-        ip_hdr->ip_off = 0;
-        ip_hdr->ip_ttl = 64;
-        ip_hdr->ip_p = CLDP_PROTOCOL;
-        ip_hdr->ip_src.s_addr = inet_addr(server_ip);
-        ip_hdr->ip_dst = bcast_addr.sin_addr;
-        ip_hdr->ip_sum = 0; // Kernel may compute checksum
+    struct ifreq* it = ifc.ifc_req;
+    const struct ifreq* const end = it + (ifc.ifc_len / sizeof(struct ifreq));
+    char* ptr = buffer + strlen(buffer);
 
-        // Build CLDP header.
-        cldp_header_t *cldp_hdr = (cldp_header_t *)(send_buffer + ip_hdr_len);
-        cldp_hdr->msg_type = HELLO;
-        cldp_hdr->payload_len = payload_len;
-        cldp_hdr->transaction_id = transaction_id++;
-        cldp_hdr->reserved = 0;
-
-        if (sendto(sockfd, send_buffer, total_len, 0, (struct sockaddr *)&bcast_addr, sizeof(bcast_addr)) < 0) {
-            perror("sendto HELLO");
-        } else {
-            printf("Broadcasted HELLO message\n");
+    for (; it != end; ++it) {
+        strcpy(ifr.ifr_name, it->ifr_name);
+        if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+            if (!(ifr.ifr_flags & IFF_LOOPBACK)) { 
+                ptr += snprintf(ptr, sizeof(buffer) - (ptr - buffer),
+                              "%s [%s], ", 
+                              ifr.ifr_name, 
+                              (ifr.ifr_flags & IFF_UP) ? "UP" : "DOWN");
+                success = 1;
+            }
         }
+    }
+    close(sock);
+
+    if (!success) {
+        return "No active network interfaces found";
+    }
+    
+
+    if (ptr > buffer + strlen("Network interfaces: ")) {
+        *(ptr - 2) = '\0';
+    }    
+
+    return buffer;
+}
+
+
+unsigned short calculate_checksum(unsigned short *addr, int len) {
+    int nleft = len;
+    int sum = 0;
+    unsigned short *w = addr;
+    unsigned short answer = 0;
+
+    while (nleft > 1)  {
+        sum += *w++;
+        nleft -= 2;
+    }
+
+    if (nleft == 1) {
+        *(unsigned char *)(&answer) = *(unsigned char *)w;
+        sum += answer;
+    }
+
+    sum = (sum >> 16) + (sum & 0xffff);
+    sum += (sum >> 16);
+    answer = ~sum;
+    return answer;
+}
+
+void *send_hello(void* arg){
+    uint16_t transaction_id = rand()%65535;
+    while(1){
+        transaction_id++;
+        char packet[BUFFER_SIZE];
+        memset(packet, 0, BUFFER_SIZE);
+
+        //Fill in IP header
+        struct iphdr* ip_header = (struct iphdr*)packet;
+        ip_header->version = 4;
+        ip_header->ihl = 5;
+        ip_header->tos = 0;
+        ip_header->tot_len = htons(sizeof(struct iphdr) + sizeof(struct cldp_header));
+        ip_header->ttl = 64;
+        ip_header->protocol = CLDP_PROTO;
+        ip_header->saddr=INADDR_ANY;
+        ip_header->daddr = inet_addr("255.255.255.255");
+        ip_header->check = calculate_checksum((unsigned short *)ip_header, sizeof(struct iphdr));
+        ip_header->frag_off = 0;
+        ip_header->id=htons(54321);
+
+        //Fill in CLDP Header
+        struct cldp_header *cldp=(struct cldp_header*)(packet + sizeof(struct iphdr));
+        cldp->type = CLDP_HELLO;
+        cldp->length = 0;
+        cldp->transaction_id = htons(transaction_id);
+        cldp->reserved = 0;
+
+        int sent_bytes=sendto(sockfd,packet,sizeof(struct iphdr)+ sizeof(struct cldp_header),0,
+                        (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr));
+        
+        if(sent_bytes<0){
+            perror("sendto failed");
+            exit(EXIT_FAILURE);
+        }
+        printf("[+] Broadcasted HELLO on the network [ Packet Size = %d ]\n",sent_bytes);
 
         sleep(10);
     }
+
     return NULL;
 }
 
-//
-// process_query: if a QUERY is received, respond with a RESPONSE containing hostname and timestamp.
-//
-void process_query(char *buffer, int size) {
-    struct ip *ip_hdr = (struct ip *)buffer;
-    int ip_hdr_len = ip_hdr->ip_hl * 4;
-    if (size < ip_hdr_len + sizeof(cldp_header_t)) {
-        fprintf(stderr, "Received packet too small\n");
-        return;
+void handle_query(struct sockaddr_in *clientaddr,struct cldp_header* recv_cldp){
+    char response_packet[BUFFER_SIZE];
+    memset(response_packet,0,BUFFER_SIZE);
+
+    struct iphdr *ip_header=(struct iphdr*)response_packet;
+    ip_header->version = 4;
+    ip_header->ihl = 5;
+    ip_header->tos = 0;
+    ip_header->id = htons(54321);
+    ip_header->frag_off = 0;
+    ip_header->ttl = 64;
+    ip_header->protocol = CLDP_PROTO;
+    ip_header->saddr = INADDR_ANY;
+    ip_header->daddr = clientaddr->sin_addr.s_addr;
+    ip_header->check = calculate_checksum((unsigned short *)ip_header, sizeof(struct iphdr));
+
+    struct cldp_header *cldp = (struct cldp_header*)(response_packet + sizeof(struct iphdr));
+    cldp->type = CLDP_RESPONSE;
+    cldp->transaction_id = recv_cldp->transaction_id;
+    cldp->reserved = 0;
+
+    //Fill data
+    char *payload=(char*)(response_packet + sizeof(struct iphdr) + sizeof(struct cldp_header));
+    switch (recv_cldp->reserved) {
+        case HOSTNAME:
+            strncpy(payload, get_host_name(), BUFFER_SIZE - sizeof(struct iphdr) - sizeof(struct cldp_header));
+            break;
+        case CPU_LOAD:
+            strncpy(payload, get_cpu_load(), BUFFER_SIZE - sizeof(struct iphdr) - sizeof(struct cldp_header));
+            break;
+        case SYSTEM_TIME:
+            strncpy(payload, get_system_time(), BUFFER_SIZE - sizeof(struct iphdr) - sizeof(struct cldp_header));
+            break;
+        case NETWORK_STATUS:
+            strncpy(payload, get_network_status(), BUFFER_SIZE - sizeof(struct iphdr) - sizeof(struct cldp_header));
+            break;
+        case MEMORY_USAGE:
+            strncpy(payload, get_memory_usage(), BUFFER_SIZE - sizeof(struct iphdr) - sizeof(struct cldp_header));
+            break;
+        default:
+            printf("[-] Invalid metadata is being accessed\n");
+            return;
+    }
+    cldp->length = strlen(payload);
+    ip_header->tot_len = htons(sizeof(struct iphdr) + sizeof(struct cldp_header) + cldp->length);
+
+
+
+    int sent_bytes=sendto(sockfd,response_packet,sizeof(struct iphdr)+ sizeof(struct cldp_header) + cldp->length,0,
+                    (struct sockaddr*)clientaddr, sizeof(*clientaddr));
+    
+    if(sent_bytes<0){
+        perror("sendto failed");
+        exit(EXIT_FAILURE);
     }
 
-    cldp_header_t *query_hdr = (cldp_header_t *)(buffer + ip_hdr_len);
-    if (query_hdr->msg_type != QUERY)
-        return;  // Only process QUERY messages here
-
-    printf("Received QUERY from %s\n", inet_ntoa(ip_hdr->ip_src));
-
-    // Build RESPONSE packet.
-    char send_buffer[BUF_SIZE];
-    memset(send_buffer, 0, BUF_SIZE);
-
-    struct ip *ip_send = (struct ip *)send_buffer;
-    int ip_send_len = sizeof(struct ip);
-    // Get metadata: hostname and timestamp.
-    char hostname[256];
-    gethostname(hostname, sizeof(hostname));
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    char time_str[64];
-    snprintf(time_str, sizeof(time_str), "%ld.%06ld", tv.tv_sec, tv.tv_usec);
-    char payload[512];
-    snprintf(payload, sizeof(payload), "hostname:%s,time:%s", hostname, time_str);
-    uint8_t payload_len = (uint8_t)strlen(payload);
-
-    int total_len = ip_send_len + sizeof(cldp_header_t) + payload_len;
-    ip_send->ip_hl = ip_send_len / 4;
-    ip_send->ip_v = 4;
-    ip_send->ip_tos = 0;
-    ip_send->ip_len = htons(total_len);
-    ip_send->ip_id = htons(0);
-    ip_send->ip_off = 0;
-    ip_send->ip_ttl = 64;
-    ip_send->ip_p = CLDP_PROTOCOL;
-    ip_send->ip_src.s_addr = inet_addr(server_ip);
-    ip_send->ip_dst = ip_hdr->ip_src;  // Reply to sender
-    ip_send->ip_sum = 0;
-
-    cldp_header_t *resp_hdr = (cldp_header_t *)(send_buffer + ip_send_len);
-    resp_hdr->msg_type = RESPONSE;
-    resp_hdr->payload_len = payload_len;
-    resp_hdr->transaction_id = query_hdr->transaction_id;
-    resp_hdr->reserved = 0;
-
-    memcpy(send_buffer + ip_send_len + sizeof(cldp_header_t), payload, payload_len);
-
-    struct sockaddr_in dest_addr;
-    memset(&dest_addr, 0, sizeof(dest_addr));
-    dest_addr.sin_family = AF_INET;
-    dest_addr.sin_addr = ip_hdr->ip_src;
-
-    if (sendto(sockfd, send_buffer, total_len, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0) {
-        perror("sendto RESPONSE");
-    } else {
-        printf("Sent RESPONSE to %s\n", inet_ntoa(dest_addr.sin_addr));
-    }
+    printf("[+] Sent RESPONSE back to client. [Packet size = %d, Transaction ID = %d ]\n",sent_bytes,cldp->transaction_id);
+    printf("[+] Payload = %s\n",payload);
 }
 
-int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: sudo %s <interface_name> <server_ip>\n", argv[0]);
-        exit(EXIT_FAILURE);
-    }
-    strncpy(iface, argv[1], sizeof(iface) - 1);
-    strncpy(server_ip, argv[2], sizeof(server_ip) - 1);
-    printf("Using interface %s with server IP %s\n", iface, server_ip);
-
-    sockfd = socket(AF_INET, SOCK_RAW, CLDP_PROTOCOL);
-    if (sockfd < 0) {
-        perror("socket");
-        exit(EXIT_FAILURE);
-    }
-    // Bind the socket to the given interface.
-    if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, iface, strlen(iface)) < 0) {
-        perror("SO_BINDTODEVICE");
-    }
-    // Tell the kernel that we are including our own IP header.
-    int one = 1;
-    if (setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &one, sizeof(one)) < 0) {
-        perror("setsockopt (IP_HDRINCL)");
+int main(){
+    srand(time(NULL));
+    signal(SIGINT,handle_sigint);
+    sockfd=socket(AF_INET, SOCK_RAW, CLDP_PROTO);
+    if(sockfd<0){
+        perror("[-] socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    // Start HELLO broadcast thread.
-    pthread_t hello_tid;
-    if (pthread_create(&hello_tid, NULL, send_hello_thread, NULL) != 0) {
-        perror("pthread_create");
+    //Enable broadcast
+    int enable_broadcast=1;
+    if(setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &enable_broadcast, sizeof(enable_broadcast))<0){
+        perror("[-] setsockopt(SO_BROADCAST) failed");
         exit(EXIT_FAILURE);
     }
 
-    printf("CLDP Server is running and awaiting QUERY messages...\n");
+    //Enable IP_HDRINCL (since we're constructing the IP Header manually)
+    int optval=1;
+    if(setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval))<0){
+        perror("[-] setsockopt(IP_HDRINCL) failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
 
-    // Main loop: receive incoming packets and process QUERY messages.
-    char recv_buffer[BUF_SIZE];
-    struct sockaddr_in src_addr;
-    socklen_t addr_len = sizeof(src_addr);
-    while (1) {
-        int recv_len = recvfrom(sockfd, recv_buffer, BUF_SIZE, 0, (struct sockaddr *)&src_addr, &addr_len);
-        if (recv_len < 0) {
-            perror("recvfrom");
+    struct sockaddr_in serveraddr,clientaddr;
+    serveraddr.sin_family=AF_INET;
+    serveraddr.sin_port=0;
+    serveraddr.sin_addr.s_addr=htonl(INADDR_ANY);
+
+    broadcast_addr.sin_family=AF_INET;
+    broadcast_addr.sin_port = 0;
+    broadcast_addr.sin_addr.s_addr=inet_addr("255.255.255.255");
+
+    printf("[+] CLDP server started. Sending HELLO every 10 seconds\n");
+
+    pthread_t hello_thread;
+
+    if(pthread_create(&hello_thread, NULL,send_hello,NULL)!=0){
+        perror("[-] pthread_create");
+        exit(EXIT_FAILURE);
+    }
+
+    char buffer[BUFFER_SIZE];
+
+    while(1){
+        socklen_t addrlen=sizeof(clientaddr);
+        int bytes_received=recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&clientaddr, &addrlen);
+        if(bytes_received<0){
+            perror("recvfrom failed");
             continue;
         }
-        // Process the packet if it is a QUERY.
-        process_query(recv_buffer, recv_len);
+        
+        struct iphdr*  ip_header=(struct iphdr*)buffer;
+        int ip_hdr_len = ip_header->ihl*4;
+        if(bytes_received < ip_hdr_len + sizeof(struct cldp_header)){
+            continue;
+        }
+        struct cldp_header *cldp = (struct cldp_header*)(buffer + ip_hdr_len);
+
+        if(ip_header->protocol!=CLDP_PROTO){
+            continue;
+        }
+
+        // printf("Raw message bytes: ");
+        // for (int i = 0; i < 20; i++) {
+        //     printf("%02x ", (unsigned char)buffer[i]);
+        // }
+        // printf("\n");
+
+        switch(cldp->type){
+            case CLDP_HELLO:
+                printf("[+] Received HELLO from %s\n", inet_ntoa(clientaddr.sin_addr));
+                break;
+            case CLDP_QUERY:
+                printf("[+] Received QUERY from %s. [Transaction ID = %d ]\n", inet_ntoa(clientaddr.sin_addr),cldp->transaction_id);
+                handle_query( &clientaddr, cldp);
+                break;
+            case CLDP_RESPONSE:
+                break;
+            default:
+                printf("[-] Unknown CLDP message. [ Type = %d ]\n",cldp->type);
+        }       
     }
 
     close(sockfd);
     return 0;
 }
-
