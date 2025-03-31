@@ -5,7 +5,7 @@ TARGETS = cldp_client cldp_server
 all: $(TARGETS)
 
 cldp_client: cldp_client.c
-	$(CC) $(CFLAGS) -o cldp_client cldp_client.c
+	$(CC) $(CFLAGS) -o cldp_client cldp_client.c 
 
 cldp_server: cldp_server.c
 	$(CC) $(CFLAGS) -o cldp_server cldp_server.c
