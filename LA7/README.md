@@ -13,7 +13,7 @@ LCDP is a lightweight protocol designed for discovering nodes on a local network
 - Clients can query servers for system information
 - Servers respond with hostname, timestamp, and system load metrics
 
-### Message Types
+### Message packet_types
 
 1. **HELLO**: Announces node presence on the network
 2. **QUERY**: Requests system information from a node

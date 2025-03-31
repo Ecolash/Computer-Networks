@@ -1,257 +1,269 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <signal.h>
+#include <time.h>
+
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <linux/ip.h>
-#include <unistd.h>
-#include <time.h>
 
-#define CLDP_PROTO 253
-#define BUFFER_SIZE 1024
-#define MAX_QUERY 10
+#define CLDP_HELLO            0x01
+#define CLDP_QUERY            0x02
+#define CLDP_RESPONSE         0x03      
+#define ALL_METADATA          0xFF
 
-#define CLDP_HELLO 0x01
-#define CLDP_QUERY 0x02
-#define CLDP_RESPONSE 0x03
+#define BOLD "\033[1m"
+#define RESET "\033[0m"
 
-#define HOSTNAME 0x10
-#define CPU_LOAD 0x11
-#define SYSTEM_TIME 0x12
-#define NETWORK_STATUS 0x13
-#define MEMORY_USAGE 0x14
+#define CLDP_PROTOCOL_NO      253
+#define MAX_BUFFER_SIZE       2048  
+#define MAX_QUERY             100
+#define MAX_METADATA_SIZE     1024
+#define MAX_QUERY_SIZE        100
 
 #pragma pack(push,1)
 struct cldp_header {
-    uint8_t type;
-    uint8_t length;
+    uint8_t packet_type;
+    uint8_t packet_length;
     uint16_t transaction_id;
     uint32_t reserved;
 };
 #pragma pack(pop)
 
-int last_transaction;
-int current_transactions[MAX_QUERY];
-int query_type;
+int curr_transcn;
+int TRANSACTIONS[MAX_QUERY];
 
-void display_menu() {
-    printf("Choose metadata to request:\n");
-    printf("1. Hostname\n");
-    printf("2. CPU Load\n");
-    printf("3. System Time\n");
-    printf("4. Network Status\n");
-    printf("5. Memory Usage\n");
-    printf("Enter your choice: ");
+void terminate()
+{
+    for(int i = 0; i < MAX_QUERY; i++) 
+    {
+        if (TRANSACTIONS[i] != -1) 
+        {
+            int transcn_id = TRANSACTIONS[i];
+            printf("[-] Client terminated without processing QUERY ");
+            printf("[Transaction ID : %-5d ]\n", transcn_id);
+        }
+    }
+    printf("\n[!] Terminating CLDP client...\n");
+    exit(EXIT_SUCCESS);
 }
 
-unsigned short calculate_checksum(unsigned short *addr, int len) {
-    int nleft = len;
-    int sum = 0;
-    unsigned short *w = addr;
-    unsigned short answer = 0;
-
-    while (nleft > 1)  {
-        sum += *w++;
-        nleft -= 2;
+unsigned short checksum(unsigned short *addr, int len) {
+    unsigned int sum = 0;
+    while (len > 1) {
+        sum += *addr++;
+        len -= 2;
     }
 
-    if (nleft == 1) {
-        *(unsigned char *)(&answer) = *(unsigned char *)w;
-        sum += answer;
-    }
-
-    sum = (sum >> 16) + (sum & 0xffff);
-    sum += (sum >> 16);
-    answer = ~sum;
-    return answer;
+    if (len == 1)  sum += *(unsigned char *)addr;
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    return (unsigned short)(~sum);
 }
 
-int found(uint16_t trans_id){
-    for(int i=0;i<MAX_QUERY;i++){
-        if(current_transactions[i]==trans_id){
-            current_transactions[i]=-1;
+int find_active_transaction(uint16_t trans_id)
+{
+    for (int i = 0; i < MAX_QUERY; i++) {
+        if (TRANSACTIONS[i] == trans_id) {
+            TRANSACTIONS[i] = -1;
             return 1;
         }
     }
     return 0;
 }
 
-void send_query(int sockfd, struct sockaddr_in *server_addr, uint16_t trans_id){
-    char packet[BUFFER_SIZE];
-    memset(packet, 0, BUFFER_SIZE);
+void send_query(int sockfd, struct sockaddr_in *server_addr){
+    char packet[MAX_BUFFER_SIZE];
+    bzero(packet, sizeof(packet));
 
-    struct iphdr *ip_header = (struct iphdr *)packet;
-    ip_header->version = 4;
-    ip_header->ihl = 5;
-    ip_header->tos = 0;
-    ip_header->tot_len = htons(sizeof(struct iphdr) + sizeof(struct cldp_header));
-    ip_header->id = htons(54321);
-    ip_header->frag_off = 0;
-    ip_header->ttl = 64;
-    ip_header->protocol = CLDP_PROTO;
-    ip_header->saddr = INADDR_ANY;
-    ip_header->daddr = server_addr->sin_addr.s_addr;
-    ip_header->check = calculate_checksum((unsigned short *)ip_header, sizeof(struct iphdr));
+    struct iphdr *IP_HEADER = (struct iphdr *)packet;
 
+    IP_HEADER->version = 4;
+    IP_HEADER->ihl = 5;
+    IP_HEADER->tos = 0;
+    IP_HEADER->tot_len = htons(sizeof(struct iphdr) + sizeof(struct cldp_header));
+    IP_HEADER->id = htons(54321);
 
-    struct cldp_header *cldp = (struct cldp_header *)(packet + sizeof(struct iphdr));
-    cldp->type = CLDP_QUERY;
-    cldp->length = 0;
-    cldp->transaction_id = last_transaction;
-    switch(query_type) {
-        case 1:
-            cldp->reserved = HOSTNAME;
-            break;
-        case 2:
-            cldp->reserved = CPU_LOAD;
-            break;
-        case 3:
-            cldp->reserved = SYSTEM_TIME;
-            break;
-        case 4:
-            cldp->reserved = NETWORK_STATUS;
-            break;
-        case 5:
-            cldp->reserved = MEMORY_USAGE;
-            break;
-        default:
-            printf("[-] Invalid query type\n");
-            return;
-    }
-    last_transaction++;
-    int done=0;
-    for(int i=0;i<MAX_QUERY;i++){
-        if(current_transactions[i]==-1){
-            current_transactions[i]=cldp->transaction_id;
-            done=1;
-            break;
-        }
-    }
-    if(!done){
-        printf("[-] Maximum query limit is reached.Wait for responses...\n");
+    IP_HEADER->ttl = 64;
+    IP_HEADER->frag_off = 0;
+    IP_HEADER->protocol = CLDP_PROTOCOL_NO;
+    IP_HEADER->saddr = INADDR_ANY;
+    IP_HEADER->daddr = server_addr->sin_addr.s_addr;
+    IP_HEADER->check = checksum((unsigned short *)IP_HEADER, sizeof(struct iphdr));
+
+    struct cldp_header *CLDP_HEADER = (struct cldp_header *)(packet + sizeof(struct iphdr));
+    CLDP_HEADER->packet_type = CLDP_QUERY;
+    CLDP_HEADER->packet_length = 0;
+    CLDP_HEADER->transaction_id = curr_transcn++;
+    CLDP_HEADER->reserved = ALL_METADATA;
+    
+    int i;
+    for (i = 0; i < MAX_QUERY && TRANSACTIONS[i] != -1; i++);
+    if (i >= MAX_QUERY) 
+    {
+        printf("[-] Maximum query limit is reached. Wait for responses...\n");
+        printf("[-] Failed to handle transaction %d\n", CLDP_HEADER->transaction_id);
         return;
     }
 
+    TRANSACTIONS[i] = CLDP_HEADER->transaction_id;
+    int sent = sendto(sockfd, packet, sizeof(struct iphdr) + sizeof(struct cldp_header), 0, (struct sockaddr *)server_addr, sizeof(*server_addr));
+    switch(sent) {
+        case -1:
+            perror("sendto failed");
+            exit(EXIT_FAILURE);
 
-    int sent_bytes=sendto(sockfd,packet,sizeof(struct iphdr)+ sizeof(struct cldp_header),0,
-                        (struct sockaddr*)server_addr, sizeof(*server_addr));
-
-    // printf("Full packet (%d bytes): ", sent_bytes);
-    // for (int i = 0; i < sent_bytes; i++) {
-    //     printf("%02x ", (unsigned char)packet[i]);
-    // }
-    // printf("\n");
-        
-    if(sent_bytes<0){
-        perror("sendto failed");
-        exit(EXIT_FAILURE);
+        default:
+            printf("[+] Sent QUERY to server %s ", inet_ntoa(server_addr->sin_addr));
+            printf("[Size = %-3d | Transaction ID = %-5d]\n", sent, CLDP_HEADER->transaction_id);
+            return;
     }
-    printf("[+] Sent QUERY to server %s. [ Packet size = %d, Transaction ID = %d ]\n",inet_ntoa(server_addr->sin_addr),sent_bytes,cldp->transaction_id);
 }
 
+void JSON_stringify(const char *JSON) 
+{
+    const char *p = JSON;
+    printf(BOLD "\nMetadata:\n\n" RESET);
+    while (*p) {
+        if (*p == '"') {
+            p++; 
+            const char *key_start = p;
+            while (*p && *p != '"') p++;
+
+            int key_len = p - key_start;
+            char key[128] = {0};
+            strncpy(key, key_start, key_len);
+            key[key_len] = '\0';
+
+            while (*p && *p != ':') p++;
+            if (*p == ':') p++;
+            while (*p && (*p == ' ' || *p == '\t')) p++;
+
+            char value[256] = {0};
+            if (*p == '"') {
+                p++; 
+                const char *val_start = p;
+                while (*p && *p != '"') p++;
+                int val_len = p - val_start;
+
+                strncpy(value, val_start, val_len);
+                value[val_len] = '\0';
+                if (*p == '"') p++;
+            } 
+            else 
+            {
+                const char *val_start = p;
+                while (!(!*p || *p == ',' || *p == '}')) p++;
+                int val_len = p - val_start;
+                while (val_len > 0 && (val_start[val_len - 1] == ' ' || val_start[val_len - 1] == '\t')) val_len--;
+                strncpy(value, val_start, val_len);
+                value[val_len] = '\0';
+            }
+            printf("%s%-15s\033[0m:%s %s\n",BOLD, key, RESET, value);
+        } else {
+            p++;
+        }
+    }
+    printf("\n");
+}
 
 int main(){
     srand(time(NULL));
+    signal(SIGINT, terminate);
+    char buffer[MAX_BUFFER_SIZE];
+    curr_transcn = rand() % 65535;
+    for (int i = 0; i < MAX_QUERY; i++) TRANSACTIONS[i] = -1;
 
-    int sockfd = socket(AF_INET, SOCK_RAW, CLDP_PROTO);
-    if(sockfd<0){
-        perror("[-] socket creation failed");
-        exit(EXIT_FAILURE);
+    int sockfd = socket(AF_INET, SOCK_RAW, CLDP_PROTOCOL_NO);
+    switch(sockfd) 
+    {
+        case -1: perror("[-] socket failed"); exit(EXIT_FAILURE);
+        default: printf("[+] Socket created successfully\n");
     }
 
-    //Enable broadcast
-    int enable_broadcast=1;
-    if(setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &enable_broadcast, sizeof(enable_broadcast))<0){
-        perror("[-] setsockopt(SO_BROADCAST) failed");
-        exit(EXIT_FAILURE);
+    int broadcast = 1;
+    int setopt1 = setsockopt(sockfd, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+    switch(setopt1) 
+    {
+        case -1: perror("[-] setsockopt failed"); exit(EXIT_FAILURE);
+        default: printf("[+] Socket options set to SO_BROADCAST\n");
     }
 
-    //Enable IP_HDRINCL (since we're constructing the IP Header manually)
-    int optval=1;
-    if(setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval))<0){
-        perror("[-] setsockopt(IP_HDRINCL) failed");
-        close(sockfd);
-        exit(EXIT_FAILURE);
+    int optval = 1;
+    int setopt2 = setsockopt(sockfd, IPPROTO_IP, IP_HDRINCL, &optval, sizeof(optval));
+    switch(setopt2) 
+    {
+        case -1: perror("[-] setsockopt failed"); exit(EXIT_FAILURE);
+        default: printf("[+] Socket options set to IP_HDRINCL\n");
     }
-    int rcvbuf = 65536; // 64KB
-    if(setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf))<0){
-        perror("[-] setsockopt failed");
-        close(sockfd);
-        exit(EXIT_FAILURE);
-    }
-
-    for(int i=0;i<MAX_QUERY;i++){
-        current_transactions[i]=-1;
-    }
-
-
-    struct sockaddr_in client_addr,server_addr;
-    client_addr.sin_family = AF_INET;
-    client_addr.sin_port = 0;
-    client_addr.sin_addr.s_addr = INADDR_ANY;
-
-    // **Display menu and take user input**
-
-    display_menu();
-    scanf("%d", &query_type);
-
-    if (query_type < 1 || query_type > 5) {
-        printf("Invalid choice. Exiting...\n");
-        close(sockfd);
-        return 1;
+    
+    int rcv_buffer = 64 << 10; // 64 KB
+    int setopt3 = setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcv_buffer, sizeof(rcv_buffer));
+    switch(setopt3)
+    {
+        case -1: perror("[-] setsockopt SO_RCVBUF failed"); exit(EXIT_FAILURE);
+        default: printf("[+] Socket options set to SO_RCVBUF (64 KB)\n");
     }
 
 
-    printf("[+] CLDP client listening for HELLO messages...\n");
-    char buffer[BUFFER_SIZE];
-    last_transaction = rand()%65535;
+    struct sockaddr_in server_addr;
+    printf("[+] CLDP client started - listening for HELLO messages...\n\n");
+    
+    while(1)
+    {
+        memset(buffer, 0, MAX_BUFFER_SIZE);
+        socklen_t addr_len = sizeof(server_addr);
+        int recv = recvfrom(sockfd, buffer, MAX_BUFFER_SIZE, 0, (struct sockaddr *)&server_addr, &addr_len);
 
-    while(1){
+        switch(recv) 
+        {
+            case -1: perror("[-] recvfrom failed"); continue;
+            default: printf("[+] Received %d bytes from %s\n", recv, inet_ntoa(server_addr.sin_addr));
+        }
 
-        memset(buffer,0,BUFFER_SIZE);
-        socklen_t addr_len=sizeof(server_addr);
-        int bytes_received = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&server_addr, &addr_len);
-        if(bytes_received < 0){
-            perror("[-] recvfrom failed");
+        if (recv < (int)sizeof(struct iphdr)) {
+            fprintf(stderr, "[-] Received packet is smaller than the IP header. Packet ignored.\n");
             continue;
         }
 
-        struct iphdr *ip_header = (struct iphdr*)buffer;
-        int ip_hdr_len = ip_header->ihl*4;
-        if(bytes_received < ip_hdr_len + sizeof(struct cldp_header)){
+        struct iphdr *IP_HEADER = (struct iphdr *)buffer;
+        int IP_HEADER_LEN = IP_HEADER->ihl << 2;
+        int len = IP_HEADER_LEN + sizeof(struct cldp_header);
+
+        if (recv < len) 
+        {
+            fprintf(stderr, "[-] Packet size (%d bytes) is less than expected (%d bytes). Packet ignored.\n", recv, len);
             continue;
         }
-        struct cldp_header *cldp = (struct cldp_header*)(buffer + ip_hdr_len);
 
-        if(ip_header->protocol != CLDP_PROTO){
+        if (IP_HEADER->protocol != CLDP_PROTOCOL_NO) {
+            fprintf(stderr, "[-] Unexpected IP protocol (%d). Expected protocol %d.\n", IP_HEADER->protocol, CLDP_PROTOCOL_NO);
             continue;
         }
 
-        // printf("Raw message bytes: ");
-        // for (int i = 0; i < bytes_received; i++) {
-        //     printf("%02x ", (unsigned char)buffer[i]);
-        // }
-        // printf("\n");
-
-        switch(cldp->type){
+        struct cldp_header *CLDP_HEADER = (struct cldp_header *)(buffer + IP_HEADER_LEN);
+        switch (CLDP_HEADER->packet_type)
+        {
             case CLDP_HELLO:
-                printf("[+] Received HELLO from %s. [ Packet size = %d ]\n", inet_ntoa(server_addr.sin_addr),bytes_received);
-                send_query(sockfd, &server_addr, cldp->transaction_id);
+                printf("[+] Received HELLO from %s. [Packet size = %d bytes]\n", inet_ntoa(server_addr.sin_addr), recv);
+                send_query(sockfd, &server_addr);
                 break;
+
             case CLDP_RESPONSE:
-                if(!found(cldp->transaction_id)) break;
-                printf("[+] Received RESPONSE from %s. [ Packet size = %d, Transaction ID = %d ]\n", inet_ntoa(server_addr.sin_addr),
-                        bytes_received, cldp->transaction_id);
-                printf("[+]\t%s\n\n",buffer + sizeof(struct iphdr) + sizeof(struct cldp_header));
+                int id = CLDP_HEADER->transaction_id;
+                if (!find_active_transaction(id)) break;
+                printf("[+] Received RESPONSE from %s. [Packet size = %d bytes, Transaction ID = %d]\n", inet_ntoa(server_addr.sin_addr), recv, id);
+                JSON_stringify(buffer + IP_HEADER_LEN + sizeof(struct cldp_header));
                 break;
-            case CLDP_QUERY:
-                break;
+
+            case CLDP_QUERY: break;
             default:
-                printf("[-] Unknown CLDP message. [Type = %d ]\n",cldp->type);
+                fprintf(stderr, "[-] Unknown CLDP message type (%d) received from %s.\n", CLDP_HEADER->packet_type, inet_ntoa(server_addr.sin_addr));
+                break;
         }
     }
 
     close(sockfd);
     return 0;
-
 }
