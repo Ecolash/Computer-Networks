@@ -113,20 +113,100 @@ Each packet is composed of:
 Below is an example of the demo output captured during a session:
 
 ```plaintext
+sudo ./cldp_client
+[+] Socket created successfully
+[+] Socket options set to SO_BROADCAST
+[+] Socket options set to IP_HDRINCL
+[+] Socket options set to SO_RCVBUF (64 KB)
+[+] CLDP client started - listening for HELLO messages...
+
 [+] Received 28 bytes from 10.145.123.171
 [+] Received HELLO from 10.145.123.171. [Packet size = 28 bytes]
-[+] Sent QUERY to server 10.145.123.171 [Size = 28 | Transaction ID = 14912]
+[+] Sent QUERY to server 10.145.123.171 [Size = 28  | Transaction ID = 32806]
 [+] Received 28 bytes from 10.145.123.171
-[+] Received 281 bytes from 10.145.123.171
-[+] Received RESPONSE from 10.145.123.171. [Packet size = 281 bytes, Transaction ID = 14912]
+[+] Received 268 bytes from 10.145.123.171
+[+] Received RESPONSE from 10.145.123.171. [Packet size = 268 bytes, Transaction ID = 32806]
 
 Metadata:
 
 Hostname       : tuhin-hp15s-fy5xxx
-CPU Load       : avg load: 0.73, loads: 0.89, 0.68, 0.62
-System Time    : 12:57:20 2025-03-31
-Memory Usage   : 15256.09 MB used / 15663.21 MB total (97.40%)
-Uptime         : 8 days, 11 hours, 55 minutes, 36 seconds
+CPU Load       : avg load: 0.54, loads: 0.55, 0.63, 0.45
+System Time    : 19:22:30 2025-03-31
+Memory Usage   : 8455.48 MB used / 15663.20 MB total (53.98%)
+Uptime         : 0 days, 0 hours, 46 minutes, 53 seconds
+
+[+] Received 28 bytes from 10.145.123.171
+[+] Received HELLO from 10.145.123.171. [Packet size = 28 bytes]
+[+] Sent QUERY to server 10.145.123.171 [Size = 28  | Transaction ID = 32807]
+[+] Received 28 bytes from 10.145.123.171
+[+] Received 267 bytes from 10.145.123.171
+[+] Received RESPONSE from 10.145.123.171. [Packet size = 267 bytes, Transaction ID = 32807]
+
+Metadata:
+
+Hostname       : tuhin-hp15s-fy5xxx
+CPU Load       : avg load: 0.51, loads: 0.47, 0.60, 0.44
+System Time    : 19:22:40 2025-03-31
+Memory Usage   : 8427.47 MB used / 15663.20 MB total (53.80%)
+Uptime         : 0 days, 0 hours, 47 minutes, 3 seconds
+
+[+] Received 28 bytes from 10.145.123.171
+[+] Received HELLO from 10.145.123.171. [Packet size = 28 bytes]
+[+] Sent QUERY to server 10.145.123.171 [Size = 28  | Transaction ID = 32808]
+[+] Received 28 bytes from 10.145.123.171
+[+] Received 268 bytes from 10.145.123.171
+[+] Received RESPONSE from 10.145.123.171. [Packet size = 268 bytes, Transaction ID = 32808]
+
+Metadata:
+
+Hostname       : tuhin-hp15s-fy5xxx
+CPU Load       : avg load: 0.47, loads: 0.39, 0.58, 0.44
+System Time    : 19:22:50 2025-03-31
+Memory Usage   : 8416.79 MB used / 15663.20 MB total (53.74%)
+Uptime         : 0 days, 0 hours, 47 minutes, 13 seconds
+
+[+] Received 28 bytes from 10.145.99.247
+[+] Received HELLO from 10.145.99.247. [Packet size = 28 bytes]
+[+] Sent QUERY to server 10.145.99.247 [Size = 28  | Transaction ID = 32809]
+[+] Received 273 bytes from 10.145.99.247
+[+] Received RESPONSE from 10.145.99.247. [Packet size = 273 bytes, Transaction ID = 32809]
+
+Metadata:
+
+Hostname       : diganta-hp240g8notebookpc
+CPU Load       : avg load: 0.25, loads: 0.23, 0.29, 0.23
+System Time    : 19:22:55 2025-03-31
+Memory Usage   : 4638.30 MB used / 7610.58 MB total (60.95%)
+Uptime         : 0 days, 0 hours, 37 minutes, 3 seconds
+
+[+] Received 28 bytes from 10.145.123.171
+[+] Received HELLO from 10.145.123.171. [Packet size = 28 bytes]
+[+] Sent QUERY to server 10.145.123.171 [Size = 28  | Transaction ID = 32810]
+[+] Received 28 bytes from 10.145.123.171
+[+] Received 268 bytes from 10.145.123.171
+[+] Received RESPONSE from 10.145.123.171. [Packet size = 268 bytes, Transaction ID = 32810]
+
+Metadata:
+
+Hostname       : tuhin-hp15s-fy5xxx
+CPU Load       : avg load: 0.44, loads: 0.33, 0.56, 0.44
+System Time    : 19:23:00 2025-03-31
+Memory Usage   : 8398.83 MB used / 15663.20 MB total (53.62%)
+Uptime         : 0 days, 0 hours, 47 minutes, 23 seconds
+
+[+] Received 28 bytes from 10.145.99.247
+[+] Received HELLO from 10.145.99.247. [Packet size = 28 bytes]
+[+] Sent QUERY to server 10.145.99.247 [Size = 28  | Transaction ID = 32811]
+[+] Received 274 bytes from 10.145.99.247
+[+] Received RESPONSE from 10.145.99.247. [Packet size = 274 bytes, Transaction ID = 32811]
+
+Metadata:
+
+Hostname       : diganta-hp240g8notebookpc
+CPU Load       : avg load: 0.24, loads: 0.19, 0.28, 0.23
+System Time    : 19:23:05 2025-03-31
+Memory Usage   : 4600.86 MB used / 7610.58 MB total (60.45%)
+Uptime         : 0 days, 0 hours, 37 minutes, 13 seconds
 ```
 
 This output sequence illustrates:

@@ -22,7 +22,7 @@
 #define CLDP_RESPONSE       0x03
 #define CLDP_ALL_METADATA   0xFF
 
-#define JSON_FORMAT "{\n\t\"Hostname\": \"%s\",\n\t\"CPU Load\": \"%s\",\n\t\"System Time\": \"%s\",\n\t\"Memory Usage\": \"%s\",\n\t\"Uptime\": \"%s\"\n}"
+#define JSON_FORMAT "{\"Hostname\": \"%s\",\"CPU Load\": \"%s\",\"System Time\": \"%s\",\"Memory Usage\": \"%s\",\"Uptime\": \"%s\"}"
 
 #pragma pack(push,1)
 struct cldp_header {
