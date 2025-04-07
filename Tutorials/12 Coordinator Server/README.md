@@ -1,8 +1,8 @@
-# Problem Statement
+## Problem Statement
 
 Build a non-blocking TCP server in C that accepts numbers from multiple clients, sorts the received numbers, and broadcasts the sorted list back to all clients. Each client sends exactly one integer, and the server waits for all clients to provide their numbers before processing and broadcasting the sorted result using the SO_BROADCAST socket option.
 
-# System Overview
+### System Overview
 
 - **Connection Type:** Clients connect to the server via TCP.
 - **Data Flow:**
@@ -18,7 +18,7 @@ Build a non-blocking TCP server in C that accepts numbers from multiple clients,
     - Buffer management and reliable data delivery.
     - Modular code structure with robust error handling.
 
-# Implementation Details
+### Implementation Details
 
 1. **Server:**
      - **Socket Setup:** Create a TCP socket configured to be non-blocking.
@@ -42,29 +42,29 @@ Build a non-blocking TCP server in C that accepts numbers from multiple clients,
      - This approach prevents the server from getting stuck waiting for one client's data, allowing it to handle multiple clients simultaneously.
      - Using events (poll, select) to monitor the state of multiple sockets ensures responsiveness and efficient resource utilization.
 
-# Compilation & Execution
+### Compilation & Execution
 
 1. **Compile the Server and Client:**
-
-     bash
-     gcc server.c -o server
-     gcc client.c -o client
+```bash
+gcc server.c -o server
+gcc client.c -o client
+```
 
 2. **Start the Server:**
-
-     bash
-     ./server
+```bash
+./server
+```
 
 3. **Run Clients in Separate Terminals (example):**
+```bash
+./client 42
+./client 7
+./client 33
+./client 10
+./client 99
+```
 
-     bash
-     ./client 42
-     ./client 7
-     ./client 33
-     ./client 10
-     ./client 99
-
-# Sample Outputs
+### Sample Outputs
 
 **Server Output:**
 
